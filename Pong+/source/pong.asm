@@ -55,6 +55,10 @@ segment data
     paddle_right_x dw 253h                     ; Initial X position of the right paddle (hexadecimal value)
     paddle_right_y dw 0D7h                      ; Initial Y position of the right paddle (hexadecimal value)
 
+    ; Left Paddle Properties (Player 2 Controlled)
+    paddle_left_x dw 28h                       ; Initial X position of the left paddle (hexadecimal value, near left margin)
+    paddle_left_y dw 0D7h                      ; Initial Y position of the left paddle (hexadecimal value)
+
     ;-------------------------------------------------------------------------
     ; Paddle Movement Properties
     ;-------------------------------------------------------------------------
@@ -237,28 +241,47 @@ check_time:
 ; Draws the right paddle on the screen.
 ;-----------------------------------------------------------------------------
 draw_paddles:
+    ; Draws the Left Paddle
+    mov     cx, word [paddle_left_x]
+    mov     dx, word [paddle_left_y]
+draw_paddle_left_horizontal:
+    mov     ah, 0Ch
+    mov     al, 0Fh
+    mov     bh, 00h
+    int     10h
+    inc     cx
+    mov     ax, cx
+    sub     ax, word [paddle_left_x]
+    cmp     ax, word [paddle_width]
+    jng     draw_paddle_left_horizontal
+    mov     cx, word [paddle_left_x]
+    inc     dx
+    mov     ax, dx
+    sub     ax, word [paddle_left_y]
+    cmp     ax, word [paddle_height]
+    jng     draw_paddle_left_horizontal
+
     ; Draws the Right Paddle
-    mov     cx, word [paddle_right_x] ; Initializes CX with the X coordinate of the right paddle
-    mov     dx, word [paddle_right_y] ; Initializes DX with the Y coordinate of the right paddle
+    mov     cx, word [paddle_right_x]
+    mov     dx, word [paddle_right_y]
+draw_paddle_right_horizontal:
+    mov     ah, 0Ch
+    mov     al, 0Fh
+    mov     bh, 00h
+    int     10h
+    inc     cx
+    mov     ax, cx
+    sub     ax, word [paddle_right_x]
+    cmp     ax, word [paddle_width]
+    jng     draw_paddle_right_horizontal
+    mov     cx, word [paddle_right_x]
+    inc     dx
+    mov     ax, dx
+    sub     ax, word [paddle_right_y]
+    cmp     ax, word [paddle_height]
+    jng     draw_paddle_right_horizontal
 
-draw_paddle_right_horizontal: ; Loop to draw the paddle horizontally
-    mov     ah, 0Ch             ; BIOS function to WRITE PIXEL
-    mov     al, 0Fh             ; Pixel color (Bright White - 0Fh)
-    mov     bh, 00h             ; Page number 0
-    int     10h             ; Calls the BIOS video service to draw pixel at (CX, DX) with color AL
-    inc     cx              ; Increments CX to move to the next pixel horizontally
-    mov     ax, cx              ; Moves the current X coordinate (CX) into AX
-    sub     ax, word [paddle_right_x] ; Subtracts the initial X coordinate of the paddle to get the current width
-    cmp     ax, word [paddle_width] ; Compares the current width with the paddle width
-    jng     draw_paddle_right_horizontal ; Jumps if current width is Not Greater than paddle width (continues drawing horizontally)
-    mov     cx, word [paddle_right_x] ; Resets CX back to the initial X coordinate for the next vertical line
-    inc     dx              ; Increments DX to move to the next line vertically
-    mov     ax, dx              ; Moves the current Y coordinate (DX) into AX
-    sub     ax, word [paddle_right_y] ; Subtracts the initial Y coordinate to get the current height
-    cmp     ax, word [paddle_height] ; Compares the current height with the paddle height
-    jng     draw_paddle_right_horizontal ; Jumps if current height is Not Greater than paddle height (continues drawing vertically)
-
-    ret                         ; Returns from the procedure
+    ret
 
 ;-----------------------------------------------------------------------------
 ; Procedure: draw_ball
@@ -333,6 +356,45 @@ move_ball:
 ; Checks if the ball collided with the right paddle and determines the collision region.
 ;-----------------------------------------------------------------------------
 check_paddle_collision:
+    ; --- Left Paddle Collision Check (added for two-player) ---
+    mov     ax, word [ball_x]        ; Left edge of the ball (ball_x - radius)
+    sub     ax, word [ball_radius]
+    mov     bx, word [paddle_left_x]
+    add     bx, word [paddle_width]
+    cmp     ax, bx
+    jg      skip_left_paddle_collision
+    mov     ax, word [ball_x]
+    add     ax, word [ball_radius]
+    cmp     ax, word [paddle_left_x]
+    jl      skip_left_paddle_collision
+    mov     ax, word [ball_y]
+    add     ax, word [ball_radius]
+    cmp     ax, word [paddle_left_y]
+    jl      skip_left_paddle_collision
+    mov     ax, word [ball_y]
+    sub     ax, word [ball_radius]
+    mov     bx, word [paddle_left_y]
+    add     bx, word [paddle_height]
+    cmp     ax, bx
+    jg      skip_left_paddle_collision
+    ; Collision with left paddle
+    mov     ax, word [ball_y]
+    mov     bx, word [paddle_left_y]
+    add     bx, word [ball_radius]
+    cmp     ax, bx
+    jl      left_paddle_player_one_scores
+    mov     bx, word [paddle_left_y]
+    add     bx, word [paddle_height]
+    sub     bx, word [ball_radius]
+    cmp     ax, bx
+    jg      left_paddle_player_one_scores
+    ; Collision at the front of the left paddle (player two scores a point)
+    call    give_point_to_player_two
+    jmp     no_paddle_collision
+left_paddle_player_one_scores:
+    call    give_point_to_player_one
+    jmp     no_paddle_collision
+skip_left_paddle_collision:
     ; Checks horizontal collision with the paddle
     mov     ax, word [ball_x]        ; Right edge of the ball (ball_x + radius)
     add     ax, word [ball_radius]
@@ -375,6 +437,12 @@ check_paddle_collision:
     ; Collision at the front of the paddle (player scores a point)
     call    give_point_to_player_one
     jmp     no_paddle_collision
+
+; Player two (left paddle) scores routine
+give_point_to_player_two:
+    neg     word [ball_velocity_x]
+    ; You may want to add a player two score variable and update display here
+    ret
 
 computer_scores:
     ; Collision at the top or bottom (computer scores a point)
@@ -456,51 +524,82 @@ move_paddles:
 ; Checks the pressed key and performs corresponding paddle actions.
 ;-----------------------------------------------------------------------------
 check_key:
+
     ; Checks if 's' or 'S' key was pressed to exit the game
-    cmp     al, 73h                 ; Compares AL with ASCII value of 's' (lowercase)
-    je      near exit_game        ; Jumps to 'exit_game' if Equal
-    cmp     al, 53h                 ; Compares AL with ASCII value of 'S' (uppercase)
-    je      near exit_game        ; Jumps to 'exit_game' if Equal
+    cmp     al, 73h
+    je      near exit_game
+    cmp     al, 53h
+    je      near exit_game
 
-    ; Checks if 'U' or 'u' key was pressed to move the paddle up
-    cmp     al, 55h                 ; Compares AL with ASCII value of 'U' (uppercase)
-    je      move_right_paddle_up  ; Jumps to 'move_right_paddle_up' if Equal
-    cmp     al, 75h                 ; Compares AL with ASCII value of 'u' (lowercase)
-    je      move_right_paddle_up  ; Jumps to 'move_right_paddle_up' if Equal
+    ; Left Paddle Controls (W/S for up/down)
+    cmp     al, 77h ; 'w'
+    je      move_left_paddle_up
+    cmp     al, 57h ; 'W'
+    je      move_left_paddle_up
+    cmp     al, 73h ; 's'
+    jne     .skip_left_down
+    ; Don't double trigger exit_game for 's', so only if not already handled
+    cmp     al, 73h
+    je      move_left_paddle_down
+.skip_left_down:
+    cmp     al, 83h ; 'S'
+    je      move_left_paddle_down
 
-    ; Checks if 'K' or 'k' key was pressed to move the paddle right
-    cmp     al, 4Bh                 ; Compares AL with ASCII value of 'K' (uppercase)
-    je     near  move_right_paddle_right ; Jumps to 'move_right_paddle_right' if Equal
-    cmp     al, 6Bh                 ; Compares AL with ASCII value of 'k' (lowercase)
-    je     near move_right_paddle_right ; Jumps to 'move_right_paddle_right' if Equal
+    ; Right Paddle Controls (U/N for up/down, K/H for right/left)
+    cmp     al, 55h ; 'U'
+    je      move_right_paddle_up
+    cmp     al, 75h ; 'u'
+    je      move_right_paddle_up
+    cmp     al, 4Bh ; 'K'
+    je      near move_right_paddle_right
+    cmp     al, 6Bh ; 'k'
+    je      near move_right_paddle_right
+    cmp     al, 48h ; 'H'
+    je      move_right_paddle_left
+    cmp     al, 68h ; 'h'
+    je      move_right_paddle_left
+    cmp     al, 6Eh ; 'n'
+    je      move_right_paddle_down
+    cmp     al, 4Eh ; 'N'
+    je      move_right_paddle_down
 
-    ; Checks if 'H' or 'h' key was pressed to move the paddle left
-    cmp     al, 48h                 ; Compares AL with ASCII value of 'H' (uppercase)
-    je      move_right_paddle_left ; Jumps to 'move_right_paddle_left' if Equal
-    cmp     al, 68h                 ; Compares AL with ASCII value of 'h' (lowercase)
-    je      move_right_paddle_left ; Jumps to 'move_right_paddle_left' if Equal
+    ; Speed controls
+    cmp     al, 70h ; 'p'
+    je      near increase_speed_stage
+    cmp     al, 50h ; 'P'
+    je      near increase_speed_stage
+    cmp     al, 6Dh ; 'm'
+    je      near decrease_speed_stage
+    cmp     al, 4Dh ; 'M'
+    je      near decrease_speed_stage
+    jmp   near  exit_speed
 
-    ; Checks if 'N' or 'n' key was pressed to move the paddle down
-    cmp     al, 6Eh                 ; Compares AL with ASCII value of 'n' (lowercase)
-    je      move_right_paddle_down; Jumps to 'move_right_paddle_down' if Equal
-    cmp     al, 4Eh                 ; Compares AL with ASCII value of 'N' (uppercase)
-    je      move_right_paddle_down; Jumps to 'move_right_paddle_down' if Equal
+    jmp     exit_paddle_mov
 
-    ; Checks if 'p' or 'P' key was pressed to increase speed
-    cmp     al, 70h                 ; Compares AL with ASCII value of 'p' (lowercase)
-    je      near increase_speed_stage ; Jumps to 'increase_speed_stage' if Equal
-    cmp     al, 50h                 ; Compares AL with ASCII value of 'P' (uppercase)
-    je      near increase_speed_stage ; Jumps to 'increase_speed_stage' if Equal
+; Left paddle movement routines
+move_left_paddle_up:
+    mov     ax, word [paddle_velocity]
+    sub     word [paddle_left_y], ax
+    mov     bx, word [top_margin]
+    cmp     word [paddle_left_y], bx
+    jl      fix_paddle_left_top_position
+    jmp     exit_paddle_mov
+fix_paddle_left_top_position:
+    mov     word [paddle_left_y], bx
+    jmp     exit_paddle_mov
 
-    ; Checks if 'm' or 'M' key was pressed to decrease speed
-    cmp     al, 6Dh                 ; Compares AL with ASCII value of 'm' (lowercase)
-    je     near decrease_speed_stage ; Jumps to 'decrease_speed_stage' if Equal
-    cmp     al, 4Dh                 ; Compares AL with ASCII value of 'M' (uppercase)
-    je     near decrease_speed_stage ; Jumps to 'decrease_speed_stage' if Equal
-    jmp   near  exit_speed        ; Jumps to 'exit_speed' if no speed key was pressed
-
-
-    jmp     exit_paddle_mov       ; If no relevant key pressed, exits paddle movement handling
+move_left_paddle_down:
+    mov     ax, word [paddle_velocity]
+    add     word [paddle_left_y], ax
+    mov     ax, word [window_height]
+    sub     ax, word [window_bounds]
+    sub     ax, word [paddle_height]
+    cmp     word [paddle_left_y], ax
+    jg      fix_paddle_left_bottom_position
+    jmp     exit_paddle_mov
+fix_paddle_left_bottom_position:
+    mov     word [paddle_left_y], ax
+    jmp     exit_paddle_mov
 
 ;-----------------------------------------------------------------------------
 ; Procedure: move_right_paddle_up
