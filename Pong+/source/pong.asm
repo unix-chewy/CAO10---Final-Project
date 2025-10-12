@@ -525,10 +525,10 @@ move_paddles:
 ;-----------------------------------------------------------------------------
 check_key:
 
-    ; Checks if 's' or 'S' key was pressed to exit the game
-    cmp     al, 73h
+    ; Checks if 'x' or 'X' key was pressed to exit the game
+    cmp     al, 78h ; 'x'
     je      near exit_game
-    cmp     al, 53h
+    cmp     al, 58h ; 'X'
     je      near exit_game
 
     ; Left Paddle Controls (W/S for up/down)
@@ -537,11 +537,7 @@ check_key:
     cmp     al, 57h ; 'W'
     je      move_left_paddle_up
     cmp     al, 73h ; 's'
-    jne     .skip_left_down
-    ; Don't double trigger exit_game for 's', so only if not already handled
-    cmp     al, 73h
     je      move_left_paddle_down
-.skip_left_down:
     cmp     al, 83h ; 'S'
     je      move_left_paddle_down
 
