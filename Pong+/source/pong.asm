@@ -12,6 +12,15 @@ segment data
     current_speed_stage_index db 0      ; Index representing the current ball speed level (0, 1, or 2)
 
     ;-------------------------------------------------------------------------
+    ; Powerup Variables
+    ;-------------------------------------------------------------------------
+    speed_boost_active      db  0       ; 0 = inactive, 1 = active
+    speed_boost_timer       db  0       ; Timer for speed boost duration
+    original_velocity_x     dw  0       ; Store original X velocity
+    original_velocity_y     dw  0       ; Store original Y velocity
+    boost_multiplier        dw  2       ; Speed multiplier during boost (2x speed)
+
+    ;-------------------------------------------------------------------------
     ; User Interface (UI) Text Elements
     ;-------------------------------------------------------------------------
     header_line1           db  'Final Project for Computer Architecture', '$' ; Text for header line 1
@@ -21,7 +30,8 @@ segment data
     header_line2_velocity_range db '(from 1 to 3)', '$'                                          ; Text indicating the speed range
     text_player_one_points db  '00', '$'                                                      ; Buffer to store player one's score as text
     text_computer_points   db  '00', '$'                                                      ; Buffer to store the computer's score as text
-    ball_speed_text        db  '1', '$'                                                       ; Buffer to store the current ball speed level as text
+    ball_speed_text        db  '1', '$'     
+    boost_active_msg      db  'SPEED BOOST ACTIVE!', '$'                                                  ; Buffer to store the current ball speed level as text
 
     ;-------------------------------------------------------------------------
     ; Ball Properties
@@ -222,19 +232,45 @@ initialize_ball_velocity:
     ;-------------------------------------------------------------------------
 check_time:
     mov     ah, 2Ch             ; DOS interrupt function to GET SYSTEM TIME
-    int     21h             ; Calls the DOS interrupt
-    cmp     dl, byte [time_aux] ; Compares the current second (DL) with the value stored in 'time_aux'
-    je      check_time          ; If equal (time has not changed), jumps back to 'check_time' to wait
-    mov     byte [time_aux], dl  ; Updates 'time_aux' with the new second value (DL)
+    int     21h                 ; Calls the DOS interrupt
+    cmp     dl, byte [time_aux] ; Compares the current hundredths (DL) with stored value
+    je      check_boost_timer   ; If equal, check boost timer but don't update frame
+    mov     byte [time_aux], dl ; Updates 'time_aux' with the new value
+    
+    ; Update game frame
     call    clear_screen        ; Clears the screen for the next frame
     call    move_ball           ; Updates the ball's position
     call    draw_ball           ; Draws the ball at its new position
     call    move_paddles        ; Processes paddle movement based on user input
     call    draw_paddles        ; Draws the paddles
     call    draw_ui             ; Draws the user interface elements (score, headers)
-	; call    print_positions     ; Calls the debug function to print positions (commented out for release)
+    call    update_boost_timer  ; Update boost timer
 
-    jmp     check_time          ; Jumps back to 'check_time' to repeat the game loop
+check_boost_timer:
+    jmp     check_time          ; Jump back to check_time to repeat the game loop
+
+;-----------------------------------------------------------------------------
+; Procedure: update_boost_timer
+; Updates the speed boost timer and deactivates boost when time expires.
+;-----------------------------------------------------------------------------
+update_boost_timer:
+    ; Check if speed boost is active
+    cmp     byte [speed_boost_active], 1
+    jne     .exit_update_boost
+    
+    ; Decrement boost timer
+    dec     byte [speed_boost_timer]
+    jnz     .exit_update_boost
+    
+    ; Timer expired - restore original speed
+    mov     ax, word [original_velocity_x]
+    mov     word [ball_velocity_x], ax
+    mov     ax, word [original_velocity_y]
+    mov     word [ball_velocity_y], ax
+    mov     byte [speed_boost_active], 0
+
+.exit_update_boost:
+    ret
 
 ;-----------------------------------------------------------------------------
 ; Procedure: draw_paddles
@@ -541,34 +577,15 @@ check_key:
     cmp     al, 83h ; 'S'
     je      move_left_paddle_down
 
-    ; Right Paddle Controls (U/N for up/down, K/H for right/left)
-    cmp     al, 55h ; 'U'
+    ; Right Paddle Controls (Up/Down/Left/Right arrows)
+    cmp     ah, 48h         ; Up arrow scan code
     je      move_right_paddle_up
-    cmp     al, 75h ; 'u'
-    je      move_right_paddle_up
-    cmp     al, 4Bh ; 'K'
-    je      near move_right_paddle_right
-    cmp     al, 6Bh ; 'k'
-    je      near move_right_paddle_right
-    cmp     al, 48h ; 'H'
+    cmp     ah, 50h         ; Down arrow scan code
+    je      move_right_paddle_down  
+    cmp     ah, 4Bh         ; Left arrow scan code
     je      move_right_paddle_left
-    cmp     al, 68h ; 'h'
-    je      move_right_paddle_left
-    cmp     al, 6Eh ; 'n'
-    je      move_right_paddle_down
-    cmp     al, 4Eh ; 'N'
-    je      move_right_paddle_down
-
-    ; Speed controls
-    cmp     al, 70h ; 'p'
-    je      near increase_speed_stage
-    cmp     al, 50h ; 'P'
-    je      near increase_speed_stage
-    cmp     al, 6Dh ; 'm'
-    je      near decrease_speed_stage
-    cmp     al, 4Dh ; 'M'
-    je      near decrease_speed_stage
-    jmp   near  exit_speed
+    cmp     ah, 4Dh         ; Right arrow scan code
+    je      near activate_speed_boost  ; Right arrow now activates speed boost
 
     jmp     exit_paddle_mov
 
@@ -681,29 +698,37 @@ exit_paddle_mov:
     ret                         ; Returns from the procedure
 
 ;-----------------------------------------------------------------------------
-; Procedure: increase_speed_stage
-; Increases the ball speed level, up to the maximum level.
+; Procedure: activate_speed_boost
+; Activates a temporary speed boost for 2 seconds when right arrow key is pressed.
 ;-----------------------------------------------------------------------------
-increase_speed_stage:
-    inc     byte [current_speed_stage_index] ; Increments the speed level index
+activate_speed_boost:
+    cmp     byte [speed_boost_active], 1
+    je      exit_speed_boost           ; If boost already active, do nothing
+    
+    ; Store original velocities
+    mov     ax, word [ball_velocity_x]
+    mov     word [original_velocity_x], ax
+    mov     ax, word [ball_velocity_y]
+    mov     word [original_velocity_y], ax
+    
+    ; Apply speed boost (double the speed)
+    mov     ax, word [ball_velocity_x]
+    sal     ax, 1                      ; Multiply by 2 (shift left)
+    mov     word [ball_velocity_x], ax
+    
+    mov     ax, word [ball_velocity_y]
+    sal     ax, 1                      ; Multiply by 2 (shift left)
+    mov     word [ball_velocity_y], ax
+    
+    ; Activate boost and set timer
+    mov     byte [speed_boost_active], 1
+    mov     byte [speed_boost_timer], 36  ; ~2 seconds at 18.2 ticks/sec
+    
+    jmp     exit_speed_boost
 
-    cmp     byte [current_speed_stage_index], num_speed_stages ; Compares with the number of speed levels
-    jl      set_ball_speed_from_stage                            ; Jumps if Less than the number of levels (valid level)
-    mov     byte [current_speed_stage_index], num_speed_stages - 1 ; Limits the index to the maximum level
+exit_speed_boost:
+    ret
 
-    jmp     set_ball_speed_from_stage ; Goes to 'set_ball_speed_from_stage' to update the ball speed
-
-;-----------------------------------------------------------------------------
-; Procedure: decrease_speed_stage
-; Decreases the ball speed level, down to the minimum level.
-;-----------------------------------------------------------------------------
-decrease_speed_stage:
-    dec     byte [current_speed_stage_index] ; Decrements the speed level index
-
-    jns     set_ball_speed_from_stage        ; Jumps if Not Signed (index is not negative, valid level)
-    inc     byte [current_speed_stage_index] ; Limits the index to the minimum level (level 0)
-
-    jmp     set_ball_speed_from_stage        ; Goes to 'set_ball_speed_from_stage' to update the ball speed
 
 ;-----------------------------------------------------------------------------
 ; Procedure: set_ball_speed_from_stage
@@ -829,6 +854,22 @@ draw_ui:
     ; mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
     ; lea     dx, [header_line2_velocity_range] ; Loads the effective address of 'header_line2_velocity_range' into DX
     ; int     21H                 ; Calls the DOS service to print the string - Uncomment if you want to show the range
+
+        ; --- Speed Boost Indicator ---
+    cmp     byte [speed_boost_active], 1
+    jne     no_boost_indicator
+    
+    mov     ah, 02H             ; BIOS function to SET CURSOR POSITION
+    mov     bh, 00H             ; Page number 0
+    mov     dh, 03H             ; Row number 3
+    mov     dl, 06H             ; Column number 6
+    int     10H                 ; Calls the BIOS video service
+    
+    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
+    lea     dx, [boost_active_msg] ; Load message address
+    int     21H                 ; Calls the DOS service to print the string
+
+no_boost_indicator:
 
 	mov		byte[cor],branco_intenso	; Sets the color to bright white for antennas
 	mov		ax,0
