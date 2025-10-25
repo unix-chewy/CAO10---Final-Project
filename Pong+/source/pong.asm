@@ -20,6 +20,18 @@ segment data
     original_velocity_y     dw  0       ; Store original Y velocity
     boost_multiplier        dw  2       ; Speed multiplier during boost (2x speed)
 
+    ; Right Player Boost Variables
+    paddle_boost_active_right    db  0
+    paddle_boost_timer_right     db  0  
+    original_paddle_height_right dw  32h
+    boost_paddle_height_right    dw  64h
+
+    ; Left Player Boost Variables  
+    paddle_boost_active_left    db  0
+    paddle_boost_timer_left     db  0
+    original_paddle_height_left dw  32h
+    boost_paddle_height_left    dw  64h
+    
     ;-------------------------------------------------------------------------
     ; User Interface (UI) Text Elements
     ;-------------------------------------------------------------------------
@@ -56,19 +68,23 @@ segment data
     right_margin dw 05Ah                       ; Right margin for paddle positioning (pixels)
 
     ;-------------------------------------------------------------------------
-    ; Paddle Properties
+    ; Paddle Properties  
     ;-------------------------------------------------------------------------
-    paddle_width dw 0AH                        ; Paddle width (pixels)
-    paddle_height dw 032h                       ; Paddle height (pixels)
+    paddle_width dw 0AH
+    paddle_height dw 032h
 
-    ; Right Paddle Properties (Player Controlled)
-    paddle_right_x dw 253h                     ; Initial X position of the right paddle (hexadecimal value)
-    paddle_right_y dw 0D7h                      ; Initial Y position of the right paddle (hexadecimal value)
+
+    paddle_left_height dw 032h       ; Separate height for left paddle
+    paddle_right_height dw 032h      ; Separate height for right paddle
+
+    ; Right Paddle Properties (Player 1 Controlled)
+    paddle_right_x dw 253h
+    paddle_right_y dw 0D7h
 
     ; Left Paddle Properties (Player 2 Controlled)
-    paddle_left_x dw 28h                       ; Initial X position of the left paddle (hexadecimal value, near left margin)
-    paddle_left_y dw 0D7h                      ; Initial Y position of the left paddle (hexadecimal value)
-
+    paddle_left_x dw 28h
+    paddle_left_y dw 0D7h
+    
     ;-------------------------------------------------------------------------
     ; Paddle Movement Properties
     ;-------------------------------------------------------------------------
@@ -251,16 +267,16 @@ check_boost_timer:
 
 ;-----------------------------------------------------------------------------
 ; Procedure: update_boost_timer
-; Updates the speed boost timer and deactivates boost when time expires.
+; Updates all boost timers and deactivates boosts when time expires.
 ;-----------------------------------------------------------------------------
 update_boost_timer:
     ; Check if speed boost is active
     cmp     byte [speed_boost_active], 1
-    jne     .exit_update_boost
+    jne     .check_right_paddle_boost
     
-    ; Decrement boost timer
+    ; Decrement speed boost timer
     dec     byte [speed_boost_timer]
-    jnz     .exit_update_boost
+    jnz     .check_right_paddle_boost
     
     ; Timer expired - restore original speed
     mov     ax, word [original_velocity_x]
@@ -269,12 +285,36 @@ update_boost_timer:
     mov     word [ball_velocity_y], ax
     mov     byte [speed_boost_active], 0
 
+.check_right_paddle_boost:
+    cmp byte [paddle_boost_active_right], 1
+    jne .check_left_paddle_boost
+    
+    dec byte [paddle_boost_timer_right]
+    jnz .check_left_paddle_boost
+    
+    ; Restore original RIGHT paddle height
+    mov ax, word [original_paddle_height_right]
+    mov word [paddle_right_height], ax
+    mov byte [paddle_boost_active_right], 0
+
+.check_left_paddle_boost:
+    cmp byte [paddle_boost_active_left], 1
+    jne .exit_update_boost
+    
+    dec byte [paddle_boost_timer_left]
+    jnz .exit_update_boost
+    
+    ; Restore original LEFT paddle height
+    mov ax, word [original_paddle_height_left]
+    mov word [paddle_left_height], ax
+    mov byte [paddle_boost_active_left], 0
+
 .exit_update_boost:
     ret
 
 ;-----------------------------------------------------------------------------
 ; Procedure: draw_paddles
-; Draws the right paddle on the screen.
+; Draws both paddles on the screen.
 ;-----------------------------------------------------------------------------
 draw_paddles:
     ; Draws the Left Paddle
@@ -294,7 +334,7 @@ draw_paddle_left_horizontal:
     inc     dx
     mov     ax, dx
     sub     ax, word [paddle_left_y]
-    cmp     ax, word [paddle_height]
+    cmp     ax, word [paddle_left_height]    ; Use paddle_left_height
     jng     draw_paddle_left_horizontal
 
     ; Draws the Right Paddle
@@ -314,7 +354,7 @@ draw_paddle_right_horizontal:
     inc     dx
     mov     ax, dx
     sub     ax, word [paddle_right_y]
-    cmp     ax, word [paddle_height]
+    cmp     ax, word [paddle_right_height]   ; Use paddle_right_height
     jng     draw_paddle_right_horizontal
 
     ret
@@ -567,7 +607,7 @@ check_key:
     cmp     al, 58h ; 'X'
     je      near exit_game
 
-    ; Left Paddle Controls (W/S for up/down)
+    ; Left Paddle Controls (W/S for up/down, A for boost)
     cmp     al, 77h ; 'w'
     je      move_left_paddle_up
     cmp     al, 57h ; 'W'
@@ -576,16 +616,20 @@ check_key:
     je      move_left_paddle_down
     cmp     al, 83h ; 'S'
     je      move_left_paddle_down
+    cmp     al, 61h ; 'a' - Left player boost
+    je      near activate_paddle_boost_left
+    cmp     al, 41h ; 'A'
+    je      near activate_paddle_boost_left
 
-    ; Right Paddle Controls (Up/Down/Left/Right arrows)
+    ; Right Paddle Controls (Up/Down arrows, Left arrow for boost)
     cmp     ah, 48h         ; Up arrow scan code
     je      move_right_paddle_up
     cmp     ah, 50h         ; Down arrow scan code
     je      move_right_paddle_down  
-    cmp     ah, 4Bh         ; Left arrow scan code
-    je      move_right_paddle_left
+    cmp     ah, 4Bh         ; Left arrow scan code  
+    je      near activate_paddle_boost_right
     cmp     ah, 4Dh         ; Right arrow scan code
-    je      near activate_speed_boost  ; Right arrow now activates speed boost
+    je      near activate_speed_boost
 
     jmp     exit_paddle_mov
 
@@ -727,6 +771,46 @@ activate_speed_boost:
     jmp     exit_speed_boost
 
 exit_speed_boost:
+    ret
+
+;-----------------------------------------------------------------------------
+; Procedure: activate_paddle_boost_right
+; Increases right paddle for 4 seconds when left arrow key is pressed.
+;-----------------------------------------------------------------------------
+activate_paddle_boost_right:
+    cmp byte [paddle_boost_active_right], 1
+    je exit_paddle_boost_right
+    
+    ; Store original height and apply boost to RIGHT paddle only
+    mov ax, word [paddle_right_height]
+    mov word [original_paddle_height_right], ax
+    mov ax, word [boost_paddle_height_right]
+    mov word [paddle_right_height], ax
+    
+    mov byte [paddle_boost_active_right], 1
+    mov byte [paddle_boost_timer_right], 72
+    
+exit_paddle_boost_right:
+    ret
+
+;-----------------------------------------------------------------------------
+; Procedure: activate_paddle_boost_left  
+; Increases left paddle for 4 seconds when 'A' key is pressed.
+;-----------------------------------------------------------------------------
+activate_paddle_boost_left:
+    cmp byte [paddle_boost_active_left], 1
+    je exit_paddle_boost_left
+    
+    ; Store original height and apply boost to LEFT paddle only
+    mov ax, word [paddle_left_height]
+    mov word [original_paddle_height_left], ax
+    mov ax, word [boost_paddle_height_left]
+    mov word [paddle_left_height], ax
+    
+    mov byte [paddle_boost_active_left], 1
+    mov byte [paddle_boost_timer_left], 72
+    
+exit_paddle_boost_left:
     ret
 
 
