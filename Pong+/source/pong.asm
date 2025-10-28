@@ -1,1043 +1,874 @@
 ;-----------------------------------------------------------------------------
-; PONG Game in NASM Assembly
+; PONG+ Enhanced Game - Assembly Implementation
+; Enhanced Features: Two-player mode, power-up system, adaptive ball physics
+; Development Team: Kyle Naguit, Fritzch Santos, Joney Sunga
 ;-----------------------------------------------------------------------------
 
 segment data
     ;-------------------------------------------------------------------------
-    ; Game State Variables
+    ; Primary Game State Variables
     ;-------------------------------------------------------------------------
-    time_aux                db  0       ; Auxiliary variable to control frame time based on system time
-    computer_points         db  0       ; Stores the computer's score
-    player_one_points      db  0       ; Stores player one's score
-    current_speed_stage_index db 0      ; Index representing the current ball speed level (0, 1, or 2)
+    frame_counter              db  0       ; Controls frame timing using system clock
+    player_two_score           db  0       ; Player two's current score
+    player_one_score           db  0       ; Player one's current score
+    ball_velocity_index        db  0       ; Current ball speed tier (0-2)
 
     ;-------------------------------------------------------------------------
-    ; Powerup Variables
+    ; Power-up System Variables
     ;-------------------------------------------------------------------------
-    speed_boost_active      db  0       ; 0 = inactive, 1 = active
-    speed_boost_timer       db  0       ; Timer for speed boost duration
-    original_velocity_x     dw  0       ; Store original X velocity
-    original_velocity_y     dw  0       ; Store original Y velocity
-    boost_multiplier        dw  2       ; Speed multiplier during boost (2x speed)
+    velocity_boost_active      db  0       ; Velocity boost status
+    velocity_boost_duration    db  0       ; Remaining boost time
+    base_velocity_x            dw  0       ; Original X velocity storage
+    base_velocity_y            dw  0       ; Original Y velocity storage
+    velocity_multiplier        dw  2       ; Boost speed factor
 
-    ; Right Player Boost Variables
-    paddle_boost_active_right    db  0
-    paddle_boost_timer_right     db  0  
-    original_paddle_height_right dw  32h
-    boost_paddle_height_right    dw  64h
+    ; Player-specific original velocity storage
+    base_vel_x_player_left     dw  0  
+    base_vel_y_player_left     dw  0
+    base_vel_x_player_right    dw  0  
+    base_vel_y_player_right    dw  0
 
-    ; Left Player Boost Variables  
-    paddle_boost_active_left    db  0
-    paddle_boost_timer_left     db  0
-    original_paddle_height_left dw  32h
-    boost_paddle_height_left    dw  64h
+    ; Right Player Enhancement Variables
+    paddle_enhance_right       db  0
+    paddle_timer_right         db  0  
+    standard_height_right      dw  32h
+    enhanced_height_right      dw  64h
+
+    ; Left Player Enhancement Variables
+    paddle_enhance_left        db  0
+    paddle_timer_left          db  0
+    standard_height_left       dw  32h
+    enhanced_height_left       dw  64h
+
+    ; Ball Deceleration System
+    slow_ball_left_active      db  0  
+    slow_ball_left_timer       db  0    
+    slow_ball_right_active     db  0  
+    slow_ball_right_timer      db  0
     
     ;-------------------------------------------------------------------------
-    ; User Interface (UI) Text Elements
+    ; User Interface Elements
     ;-------------------------------------------------------------------------
-    header_line1           db  'Final Project for Computer Architecture', '$' ; Text for header line 1
-    header_line2_prefix    db  'Group Shit:  ', '$'                                  ; Prefix for header line 2
-    header_line2_score_separator db ' x ', '$'                                                 ; Separator between player and computer score in header line 2
-    header_line2_computer_text db '  Computer -- Current speed: ', '$'                    ; Text indicating computer score and current speed
-    header_line2_velocity_range db '(from 1 to 3)', '$'                                          ; Text indicating the speed range
-    text_player_one_points db  '00', '$'                                                      ; Buffer to store player one's score as text
-    text_computer_points   db  '00', '$'                                                      ; Buffer to store the computer's score as text
-    ball_speed_text        db  '1', '$'     
-    boost_active_msg      db  'SPEED BOOST ACTIVE!', '$'                                                  ; Buffer to store the current ball speed level as text
+    game_header              db  'Final Project for Computer Architecture', '$'
+    score_prefix             db  'Team Members: Naguit Kyle, Santos Fritzch, Sunga Joney', '$'
+    score_separator          db ' x ', '$'
+    speed_display_text       db '  Computer -- Current speed: ', '$'
+    speed_range_info         db '(from 1 to 3)', '$'
+    player_one_display       db  '00', '$'
+    player_two_display       db  '00', '$'
+    current_speed_display    db  '1', '$'
+    boost_status_message     db  'VELOCITY BOOST ACTIVE!', '$'
 
     ;-------------------------------------------------------------------------
-    ; Ball Properties
+    ; Game Object Properties
     ;-------------------------------------------------------------------------
-    ball_original_x        dw  127h    ; Initial X position of the ball (hexadecimal value)
-    ball_original_y        dw  0D7h    ; Initial Y position of the ball (hexadecimal value)
-    ball_x                dw  127h    ; Current X position of the ball (hexadecimal value)
-    ball_y                dw  0D7h    ; Current Y position of the ball (hexadecimal value)
-    ball_radius           dw  07h     ; Ball radius (hexadecimal value)
-    ball_velocity_x       dw  00H     ; Current horizontal velocity of the ball (hexadecimal value, positive for right, negative for left)
-    ball_velocity_y       dw  00h     ; Current vertical velocity of the ball (hexadecimal value, positive for down, negative for up)
-    ball_speeds           dw  05h, 0Ah, 0Fh  ; Array of word values defining ball speeds for each speed level (hexadecimal values)
-    num_speed_stages      equ 3       ; Number of available speed levels
+    ball_initial_x           dw  127h    ; Starting X coordinate
+    ball_initial_y           dw  0D7h    ; Starting Y coordinate
+    ball_position_x          dw  127h    ; Current X position
+    ball_position_y          dw  0D7h    ; Current Y position
+    ball_diameter            dw  07h     ; Ball size
+    ball_velocity_x          dw  00H     ; Horizontal movement speed
+    ball_velocity_y          dw  00h     ; Vertical movement speed
+    velocity_tiers           dw  05h, 0Ah, 0Fh  ; Speed levels
 
-    ;-------------------------------------------------------------------------
-    ; Screen Dimensions and Margins
-    ;-------------------------------------------------------------------------
-    window_width dw 280h                       ; Screen width in pixels (640 pixels = 280h)
-    window_height dw 1E0h                      ; Screen height in pixels (480 pixels = 1E0h)
-    window_bounds dw 05h                       ; Boundary margin for collision detection (pixels)
-    top_margin dw 032h                         ; Top margin for the game area (pixels)
-    right_margin dw 05Ah                       ; Right margin for paddle positioning (pixels)
+    ; Display configuration
+    display_width            dw 280h     ; Screen width (640px)
+    display_height           dw 1E0h     ; Screen height (480px)
+    border_offset            dw 05h      ; Collision boundary
+    play_area_top            dw 032h     ; Top play boundary
+    side_boundary            dw 05Ah     ; Side margin
 
     ;-------------------------------------------------------------------------
-    ; Paddle Properties  
+    ; Paddle Configuration  
     ;-------------------------------------------------------------------------
-    paddle_width dw 0AH
-    paddle_height dw 032h
+    paddle_thickness         dw 0AH      ; Paddle width
+    standard_paddle_height   dw 032h     ; Normal paddle height
 
+    ; Individual paddle properties
+    left_paddle_height       dw 032h     ; Left paddle height
+    right_paddle_height      dw 032h     ; Right paddle height
 
-    paddle_left_height dw 032h       ; Separate height for left paddle
-    paddle_right_height dw 032h      ; Separate height for right paddle
+    ; Right Paddle (Player 1)
+    right_paddle_x           dw 253h
+    right_paddle_y           dw 0D7h
 
-    ; Right Paddle Properties (Player 1 Controlled)
-    paddle_right_x dw 253h
-    paddle_right_y dw 0D7h
-
-    ; Left Paddle Properties (Player 2 Controlled)
-    paddle_left_x dw 28h
-    paddle_left_y dw 0D7h
+    ; Left Paddle (Player 2)
+    left_paddle_x            dw 28h
+    left_paddle_y            dw 0D7h
     
-    ;-------------------------------------------------------------------------
-    ; Paddle Movement Properties
-    ;-------------------------------------------------------------------------
-    paddle_velocity dw 0Ah                     ; Paddle movement speed (pixels per key press)
+    paddle_move_speed        dw 0Ah      ; Paddle movement rate
 
     ;-------------------------------------------------------------------------
-    ; Color Definitions
+    ; Graphics Configuration
     ;-------------------------------------------------------------------------
-    cor		db		branco_intenso         ; Current drawing color, initialized to bright white
+    active_color		        db		bright_white
 
-    ;	I R G B COLOR - Color bit representation
-    ;	0 0 0 0 black          - Black
-    ;	0 0 0 1 blue           - Blue
-    ;	0 0 1 0 green          - Green
-    ;	0 0 1 1 cyan           - Cyan
-    ;	0 1 0 0 red            - Red
-    ;	0 1 0 1 magenta        - Magenta
-    ;	0 1 1 0 brown          - Brown
-    ;	0 1 1 1 white          - White
-    ;	1 0 0 0 gray           - Gray
-    ;	1 0 0 1 light blue     - Light Blue
-    ;	1 0 1 0 light green    - Light Green
-    ;	1 0 1 1 light cyan     - Light Cyan
-    ;	1 1 0 0 pink           - Pink
-    ;	1 1 0 1 light magenta  - Light Magenta
-    ;	1 1 1 0 yellow         - Yellow
-    ;	1 1 1 1 bright white   - Bright White
-
-    preto		equ		0
-    azul		equ		1
-    verde		equ		2
-    cyan		equ		3
-    vermelho	equ		4
-    magenta		equ		5
-    marrom		equ		6
-    branco		equ		7
-    cinza		equ		8
-    azul_claro	equ		9
-    verde_claro	equ		10
-    cyan_claro	equ		11
-    rosa		equ		12
-    magenta_claro	equ		13
-    amarelo		equ		14
-    branco_intenso	equ		15
-
-    ;-------------------------------------------------------------------------
-    ; Variables for drawing and other purposes
-    ;-------------------------------------------------------------------------
-    linha   	dw  		0         ; General purpose variable for row coordinate
-    coluna  	dw  		0         ; General purpose variable for column coordinate
-    deltax		dw		0         ; General purpose variable to store delta X for line drawing
-    deltay		dw		0         ; General purpose variable to store delta Y for line drawing
-
-    ;-------------------------------------------------------------------------
-    ; Debug Labels (Potentially for future debugging purposes)
-    ;-------------------------------------------------------------------------
-	ball_pos_label    db 'Ball: X,Y=', '$'   ; Label for debug output of ball position
-    paddle_pos_label  db '  Paddle: Y=', '$' ; Label for debug output of paddle Y position
+    ; Color definitions
+    black           equ  0
+    blue            equ  1
+    green           equ  2
+    cyan            equ  3
+    red             equ  4
+    magenta         equ  5
+    brown           equ  6
+    white           equ  7
+    gray            equ  8
+    light_blue      equ  9
+    light_green     equ  10
+    light_cyan      equ  11
+    pink            equ  12
+    light_magenta   equ  13
+    yellow          equ  14
+    bright_white    equ  15
+    
+    ; Drawing coordinates
+    coord_x   	    dw  0         
+    coord_y  	    dw  0         
+    diff_x		    dw 0         
+    diff_y		    dw 0         
 
 segment code
     ;-------------------------------------------------------------------------
-    ; Procedure: initialize_ball_velocity
-    ; Initializes the ball velocity based on the first speed level.
+    ; Initializes ball movement using base speed
     ;-------------------------------------------------------------------------
-initialize_ball_velocity:
-		mov     si, 0000h             ; Initializes SI to 0, index for the first speed level
-		lea     bx, [ball_speeds + si]  ; Loads the effective address of the first speed from 'ball_speeds' array into BX
-		mov     ax, word [bx]         ; Moves the word value pointed to by BX (first speed value) into AX
-		mov     word [ball_velocity_x], ax    ; Initializes the horizontal ball velocity with the loaded speed value
-		neg     ax                    ; Negates the speed value for the opposite direction
-        mov     word [ball_velocity_y], ax    ; Initializes the vertical ball velocity with the loaded speed value
-		ret                             ; Returns from the procedure
+initialize_ball_motion:
+		mov     si, 0000h
+		lea     bx, [velocity_tiers + si]
+		mov     ax, word [bx]
+		mov     word [ball_velocity_x], ax
+		neg     ax
+        mov     word [ball_velocity_y], ax
+		ret
 
 ;-----------------------------------------------------------------------------
-; Debug Functions (commented out for release, can be uncommented for debug)
+; PROGRAM INITIALIZATION
 ;-----------------------------------------------------------------------------
-; print_positions:
-;     pusha                       ; Saves all general-purpose registers onto the stack
-;
-;     ; Sets the cursor position for debug output (adjust row/column as needed)
-;     mov     ah, 02H             ; BIOS function to SET CURSOR POSITION
-;     mov     bh, 00H             ; Page number 0
-;     mov     dh, 08H             ; Row number (8th row) for cursor position
-;     mov     dl, 01H             ; Column number (1st column) for cursor position
-;     int     10H                 ; Calls the BIOS video service
-;
-;     ; Prints the label "Ball: X,Y="
-;     mov     ah, 09h             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-;     lea     dx, [ball_pos_label] ; Loads the effective address of 'ball_pos_label' into DX
-;     int     21h                 ; Calls the DOS service to print the string
-;
-;     ; Prints the value of ball_x
-;     mov     ax, word [ball_x]    ; Moves the word value of 'ball_x' into AX
-;     call    print_number        ; Calls the 'print_number' procedure to print the number in AX
-;     mov     al, ','             ; Moves the ASCII value of comma into AL
-;     call    caracter            ; Calls the 'caracter' procedure to print the character in AL
-;
-;     ; Prints the value of ball_y
-;     mov     ax, word [ball_y]    ; Moves the word value of 'ball_y' into AX
-;     call    print_number        ; Calls the 'print_number' procedure to print the number in AX
-;
-;     ; Prints the label "  Paddle: Y="
-;     mov     ah, 09h             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-;     lea     dx, [paddle_pos_label] ; Loads the effective address of 'paddle_pos_label' into DX
-;     int     21h                 ; Calls the DOS service to print the string
-;
-;     ; Prints the value of paddle_right_y
-;     mov     ax, word [paddle_right_y] ; Moves the word value of 'paddle_right_y' into AX
-;     call    print_number        ; Calls the 'print_number' procedure to print the number in AX
-;
-;     popa                        ; Restores all general-purpose registers from the stack
-;     ret                         ; Returns from the procedure
-;
-; ;-----------------------------------------------------------------------------
-; ; Procedure: print_number
-; ; Prints a number (AX) to the console.
-; ;-----------------------------------------------------------------------------
-; print_number:
-;     push dx                     ; Saves the DX register onto the stack
-;     push cx                     ; Saves the CX register onto the stack
-;     push bx                     ; Saves the BX register onto the stack
-;
-;     mov cx, 0                   ; Initializes counter CX to 0 (digit count)
-;     mov bx, 10                  ; Sets BX to 10, the base for decimal conversion
-;
-; convert_loop:                   ; Loop to convert number to digits
-;     mov dx, 0                   ; Clears the DX register (for remainder)
-;     div bx                      ; Divides AX by BX (10), quotient in AX, remainder in DX
-;     push dx                     ; Pushes the remainder (digit) onto the stack
-;     inc cx                      ; Increments the digit counter
-;     test ax, ax                 ; Tests if the quotient AX is zero
-;     jnz convert_loop            ; Jumps to 'convert_loop' if the quotient is not zero
-;
-; print_loop:                     ; Loop to print digits from the stack
-;     pop dx                      ; Pops a digit (ASCII value) from the stack into DX
-;     add dl, '0'                 ; Converts the digit value to ASCII character ('0'-'9')
-;     mov ah, 02h                 ; DOS function to WRITE CHARACTER TO STANDARD OUTPUT
-;     int 21h                     ; Calls the DOS service to print the character
-;     loop print_loop             ; Loops 'cx' times to print all digits
-;
-;     pop bx                      ; Restores the BX register from the stack
-;     pop cx                      ; Restores the CX register from the stack
-;     pop dx                      ; Restores the DX register from the stack
-;     ret                         ; Returns from the procedure
 
-;-----------------------------------------------------------------------------
-; Start of main program execution
-;-----------------------------------------------------------------------------
 ..start:
-    mov     ax, data            ; Moves the segment address of the 'data' segment into AX
-    mov     ds, ax            ; Sets the Data Segment (DS) register to AX, making the data segment accessible
-    mov     ax, stack           ; Moves the segment address of the 'stack' segment into AX
-    mov     ss, ax            ; Sets the Stack Segment (SS) register to AX, making the stack segment accessible
-    mov     sp, stacktop        ; Sets the Stack Pointer (SP) register to 'stacktop', initializing the stack
+    ; Initialize system segments
+    mov     ax, data
+    mov     ds, ax
+    mov     ax, stack
+    mov     ss, ax
+    mov     sp, stacktop
 
-    call    clear_screen          ; Calls the 'clear_screen' procedure to clear the screen and set video mode
-	call    initialize_ball_velocity ; Calls 'initialize_ball_velocity' to set the initial ball velocity
+    ; Prepare game environment
+    call    clear_display
+	call    initialize_ball_motion
 
     ;-------------------------------------------------------------------------
-    ; Main game loop - Synchronized with system time for frame rate control
+    ; Primary Game Loop - Frame Rate Controlled
     ;-------------------------------------------------------------------------
-check_time:
-    mov     ah, 2Ch             ; DOS interrupt function to GET SYSTEM TIME
-    int     21h                 ; Calls the DOS interrupt
-    cmp     dl, byte [time_aux] ; Compares the current hundredths (DL) with stored value
-    je      check_boost_timer   ; If equal, check boost timer but don't update frame
-    mov     byte [time_aux], dl ; Updates 'time_aux' with the new value
+game_loop:
+    mov     ah, 2Ch             ; Get system time
+    int     21h
+    cmp     dl, byte [frame_counter]
+    je      check_powerups
+    mov     byte [frame_counter], dl
     
-    ; Update game frame
-    call    clear_screen        ; Clears the screen for the next frame
-    call    move_ball           ; Updates the ball's position
-    call    draw_ball           ; Draws the ball at its new position
-    call    move_paddles        ; Processes paddle movement based on user input
-    call    draw_paddles        ; Draws the paddles
-    call    draw_ui             ; Draws the user interface elements (score, headers)
-    call    update_boost_timer  ; Update boost timer
+    ; Frame rendering sequence
+    call    clear_display
+    call    update_ball_position
+    call    draw_ball_sprite
+    call    process_paddle_movement
+    call    render_paddles
+    call    display_interface
+    call    update_powerup_timers
 
-check_boost_timer:
-    jmp     check_time          ; Jump back to check_time to repeat the game loop
+check_powerups:
+    jmp     game_loop
 
 ;-----------------------------------------------------------------------------
-; Procedure: update_boost_timer
-; Updates all boost timers and deactivates boosts when time expires.
+; Updates all power-up timers and deactivates expired power-ups
 ;-----------------------------------------------------------------------------
-update_boost_timer:
-    ; Check if speed boost is active
-    cmp     byte [speed_boost_active], 1
+update_powerup_timers:
+    ; Check velocity boost
+    cmp     byte [velocity_boost_active], 1
     jne     .check_right_paddle_boost
     
-    ; Decrement speed boost timer
-    dec     byte [speed_boost_timer]
+    dec     byte [velocity_boost_duration]
     jnz     .check_right_paddle_boost
     
-    ; Timer expired - restore original speed
-    mov     ax, word [original_velocity_x]
+    ; Restore original velocity
+    mov     ax, word [base_velocity_x]
     mov     word [ball_velocity_x], ax
-    mov     ax, word [original_velocity_y]
+    mov     ax, word [base_velocity_y]
     mov     word [ball_velocity_y], ax
-    mov     byte [speed_boost_active], 0
+    mov     byte [velocity_boost_active], 0
 
 .check_right_paddle_boost:
-    cmp byte [paddle_boost_active_right], 1
+    cmp byte [paddle_enhance_right], 1
     jne .check_left_paddle_boost
     
-    dec byte [paddle_boost_timer_right]
+    dec byte [paddle_timer_right]
     jnz .check_left_paddle_boost
     
-    ; Restore original RIGHT paddle height
-    mov ax, word [original_paddle_height_right]
-    mov word [paddle_right_height], ax
-    mov byte [paddle_boost_active_right], 0
+    ; Restore right paddle height
+    mov ax, word [standard_height_right]
+    mov word [right_paddle_height], ax
+    mov byte [paddle_enhance_right], 0
 
 .check_left_paddle_boost:
-    cmp byte [paddle_boost_active_left], 1
-    jne .exit_update_boost
+    cmp byte [paddle_enhance_left], 1
+    jne .check_slow_ball_left
     
-    dec byte [paddle_boost_timer_left]
-    jnz .exit_update_boost
+    dec byte [paddle_timer_left]
+    jnz .check_slow_ball_left
     
-    ; Restore original LEFT paddle height
-    mov ax, word [original_paddle_height_left]
-    mov word [paddle_left_height], ax
-    mov byte [paddle_boost_active_left], 0
+    ; Restore left paddle height
+    mov ax, word [standard_height_left]
+    mov word [left_paddle_height], ax
+    mov byte [paddle_enhance_left], 0
 
-.exit_update_boost:
+.check_slow_ball_left:
+    cmp byte [slow_ball_left_active], 1
+    jne .check_slow_ball_right
+    
+    dec byte [slow_ball_left_timer]
+    jnz .check_slow_ball_right
+    
+    ; Restore original speed
+    mov ax, word [base_vel_x_player_left]
+    mov word [ball_velocity_x], ax
+    mov ax, word [base_vel_y_player_left]
+    mov word [ball_velocity_y], ax
+    
+    mov byte [slow_ball_left_active], 0
+    jmp .exit_powerup_update
+
+.check_slow_ball_right:
+    cmp byte [slow_ball_right_active], 1
+    jne .exit_powerup_update
+    
+    dec byte [slow_ball_right_timer]
+    jnz .exit_powerup_update
+    
+    ; Restore original speed  
+    mov ax, word [base_vel_x_player_right]
+    mov word [ball_velocity_x], ax
+    mov ax, word [base_vel_y_player_right]
+    mov word [ball_velocity_y], ax
+    
+    mov byte [slow_ball_right_active], 0
+
+.exit_powerup_update:
     ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: draw_paddles
-; Draws both paddles on the screen.
+; GRAPHICS RENDERING ENGINE
 ;-----------------------------------------------------------------------------
-draw_paddles:
-    ; Draws the Left Paddle
-    mov     cx, word [paddle_left_x]
-    mov     dx, word [paddle_left_y]
-draw_paddle_left_horizontal:
+; Renders both player paddles
+render_paddles:
+    ; Draw left paddle
+    mov     cx, word [left_paddle_x]
+    mov     dx, word [left_paddle_y]
+
+draw_left_paddle_vertical:
     mov     ah, 0Ch
     mov     al, 0Fh
     mov     bh, 00h
     int     10h
     inc     cx
     mov     ax, cx
-    sub     ax, word [paddle_left_x]
-    cmp     ax, word [paddle_width]
-    jng     draw_paddle_left_horizontal
-    mov     cx, word [paddle_left_x]
+    sub     ax, word [left_paddle_x]
+    cmp     ax, word [paddle_thickness]
+    jng     draw_left_paddle_vertical
+    mov     cx, word [left_paddle_x]
     inc     dx
     mov     ax, dx
-    sub     ax, word [paddle_left_y]
-    cmp     ax, word [paddle_left_height]    ; Use paddle_left_height
-    jng     draw_paddle_left_horizontal
+    sub     ax, word [left_paddle_y]
+    cmp     ax, word [left_paddle_height]
+    jng     draw_left_paddle_vertical
 
-    ; Draws the Right Paddle
-    mov     cx, word [paddle_right_x]
-    mov     dx, word [paddle_right_y]
-draw_paddle_right_horizontal:
+    ; Draw right paddle
+    mov     cx, word [right_paddle_x]
+    mov     dx, word [right_paddle_y]
+
+draw_right_paddle_vertical:
     mov     ah, 0Ch
     mov     al, 0Fh
     mov     bh, 00h
     int     10h
     inc     cx
     mov     ax, cx
-    sub     ax, word [paddle_right_x]
-    cmp     ax, word [paddle_width]
-    jng     draw_paddle_right_horizontal
-    mov     cx, word [paddle_right_x]
+    sub     ax, word [right_paddle_x]
+    cmp     ax, word [paddle_thickness]
+    jng     draw_right_paddle_vertical
+    mov     cx, word [right_paddle_x]
     inc     dx
     mov     ax, dx
-    sub     ax, word [paddle_right_y]
-    cmp     ax, word [paddle_right_height]   ; Use paddle_right_height
-    jng     draw_paddle_right_horizontal
+    sub     ax, word [right_paddle_y]
+    cmp     ax, word [right_paddle_height]
+    jng     draw_right_paddle_vertical
 
     ret
 
-;-----------------------------------------------------------------------------
-; Procedure: draw_ball
-; Draws the ball on the screen using the 'full_circle' procedure.
-;-----------------------------------------------------------------------------
-draw_ball:
-    ; mov cx, word [ball_x]     ; (Not used - CX and DX are set by full_circle parameters)
-    ; mov dx, word [ball_y]     ; (Not used - CX and DX are set by full_circle parameters)
-    mov     byte [cor], vermelho ; Sets the drawing color to red (vermelho)
-    mov     ax, word [ball_x]    ; Moves the ball's X coordinate into AX for 'full_circle' parameter
-    push    ax              ; Pushes the X coordinate onto the stack
-    mov     ax, word [ball_y]    ; Moves the ball's Y coordinate into AX for 'full_circle' parameter
-    push    ax              ; Pushes the Y coordinate onto the stack
-    mov     ax, word [ball_radius] ; Moves the ball's radius into AX for 'full_circle' parameter
-    push    ax              ; Pushes the radius onto the stack
-    call    full_circle         ; Calls the 'full_circle' procedure to draw a filled circle
-    ret                         ; Returns from the procedure
+; Renders the game ball
+draw_ball_sprite:
+    mov     byte [active_color], red
+    mov     ax, word [ball_position_x]
+    push    ax
+    mov     ax, word [ball_position_y]
+    push    ax
+    mov     ax, word [ball_diameter]
+    push    ax
+    call    full_circle
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: move_ball
-; Updates the ball's position, handles boundary collisions and paddle collisions.
+; Updates ball position and handles collisions
 ;-----------------------------------------------------------------------------
-move_ball:
+update_ball_position:
     ; Horizontal movement
-    mov     ax, word [ball_velocity_x] ; Gets the horizontal velocity of the ball
-    add     word [ball_x], ax        ; Adds the velocity to the ball's X position
+    mov     ax, word [ball_velocity_x]
+    add     word [ball_position_x], ax
 
-    ; Checks for collision with the paddle before boundary checks
-    call    check_paddle_collision    ; Calls 'check_paddle_collision' to check if the ball hit the paddle
+    ; Check paddle collisions before boundaries
+    call    detect_paddle_contact
 
     ; Horizontal boundary checks
-    mov     ax, word [ball_x]        ; Gets the current X position of the ball
-    sub     ax, word [ball_radius]   ; Subtracts the ball's radius to get the left edge of the ball
-    mov     bx, word [window_bounds] ; Gets the window boundary margin
-    add     bx, word [window_bounds] ; Adds the window boundary margin to itself (effectively 2 * window_bounds)
-    cmp     ax, bx              ; Compares the left edge with the boundary margin
-    jl      near neg_velocity_x   ; If left edge is Less than the boundary, ball hit the left wall -> reverse X velocity
+    mov     ax, word [ball_position_x]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [border_offset]
+    add     bx, word [border_offset]
+    cmp     ax, bx
+    jl      near invert_x_velocity
 
-    mov     ax, word [ball_x]        ; Gets the current X position of the ball
-    add     ax, word [ball_radius]   ; Adds the ball's radius to get the right edge of the ball
-    mov     bx, word [window_width]  ; Gets the screen width
-    sub     bx, word [window_bounds] ; Subtracts the boundary margin from the screen width
-    cmp     ax, bx              ; Compares the right edge with the right boundary
-    jg      near give_point_to_computer ; If right edge is Greater than the boundary, ball passed the right side -> computer gets a point.
+    mov     ax, word [ball_position_x]
+    add     ax, word [ball_diameter]
+    mov     bx, word [display_width]
+    sub     bx, word [border_offset]
+    cmp     ax, bx
+    jg      near award_point_player_two
 
     ; Vertical movement
-    mov     ax, word [ball_velocity_y] ; Gets the vertical velocity of the ball
-    add     word [ball_y], ax        ; Adds the velocity to the ball's Y position
+    mov     ax, word [ball_velocity_y]
+    add     word [ball_position_y], ax
 
     ; Vertical boundary checks
-    mov     ax, word [ball_y]        ; Gets the current Y position of the ball
-    sub     ax, word [ball_radius]   ; Subtracts the ball's radius to get the top edge of the ball
-
-    mov     bx, word [top_margin]     ; Loads top_margin for the top boundary
-    add     bx, word [window_bounds]    ; Adds window_bounds to top_margin (BX = top_margin + window_bounds)
-
-    cmp     ax, bx              ; Compares the top edge with the top boundary
-    jl      near neg_velocity_y   ; If top edge is Less than the top boundary, ball hit the top wall -> reverse Y velocity
-
-    mov     ax, word [ball_y]        ; Gets the current Y position of the ball
-    add     ax, word [ball_radius]   ; Adds the ball's radius to get the bottom edge of the ball
-    mov     bx, word [window_height] ; Gets the screen height
-    sub     bx, word [window_bounds]   ; Subtracts the boundary margin from the screen height
-    sub     bx, word [window_bounds]   ; Subtracts the boundary margin again (effectively 2 * window_bounds from the bottom)
-
-    cmp     ax, bx              ; Compares the bottom edge with the bottom boundary
-    jg      near neg_velocity_y   ; If bottom edge is Greater than the bottom boundary, ball hit the bottom wall -> reverse Y velocity
-    ret                         ; Returns from the procedure
-
-;-----------------------------------------------------------------------------
-; Procedure: check_paddle_collision
-; Checks if the ball collided with the right paddle and determines the collision region.
-;-----------------------------------------------------------------------------
-check_paddle_collision:
-    ; --- Left Paddle Collision Check (added for two-player) ---
-    mov     ax, word [ball_x]        ; Left edge of the ball (ball_x - radius)
-    sub     ax, word [ball_radius]
-    mov     bx, word [paddle_left_x]
-    add     bx, word [paddle_width]
+    mov     ax, word [ball_position_y]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [play_area_top]
+    add     bx, word [border_offset]
     cmp     ax, bx
-    jg      skip_left_paddle_collision
-    mov     ax, word [ball_x]
-    add     ax, word [ball_radius]
-    cmp     ax, word [paddle_left_x]
-    jl      skip_left_paddle_collision
-    mov     ax, word [ball_y]
-    add     ax, word [ball_radius]
-    cmp     ax, word [paddle_left_y]
-    jl      skip_left_paddle_collision
-    mov     ax, word [ball_y]
-    sub     ax, word [ball_radius]
-    mov     bx, word [paddle_left_y]
-    add     bx, word [paddle_height]
-    cmp     ax, bx
-    jg      skip_left_paddle_collision
-    ; Collision with left paddle
-    mov     ax, word [ball_y]
-    mov     bx, word [paddle_left_y]
-    add     bx, word [ball_radius]
-    cmp     ax, bx
-    jl      left_paddle_player_one_scores
-    mov     bx, word [paddle_left_y]
-    add     bx, word [paddle_height]
-    sub     bx, word [ball_radius]
-    cmp     ax, bx
-    jg      left_paddle_player_one_scores
-    ; Collision at the front of the left paddle (player two scores a point)
-    call    give_point_to_player_two
-    jmp     no_paddle_collision
-left_paddle_player_one_scores:
-    call    give_point_to_player_one
-    jmp     no_paddle_collision
-skip_left_paddle_collision:
-    ; Checks horizontal collision with the paddle
-    mov     ax, word [ball_x]        ; Right edge of the ball (ball_x + radius)
-    add     ax, word [ball_radius]
-    cmp     ax, word [paddle_right_x]
-    jl      no_paddle_collision       ; No collision if the ball is to the left of the paddle
+    jl      near invert_y_velocity
 
-    mov     ax, word [ball_x]        ; Left edge of the ball (ball_x - radius)
-    sub     ax, word [ball_radius]
-    mov     bx, word [paddle_right_x]
-    add     bx, word [paddle_width]
+    mov     ax, word [ball_position_y]
+    add     ax, word [ball_diameter]
+    mov     bx, word [display_height]
+    sub     bx, word [border_offset]
+    sub     bx, word [border_offset]
     cmp     ax, bx
-    jg      no_paddle_collision       ; No collision if the ball is to the right of the paddle
-
-    ; Checks vertical collision with the paddle
-    mov     ax, word [ball_y]        ; Bottom edge of the ball (ball_y + radius)
-    add     ax, word [ball_radius]
-    cmp     ax, word [paddle_right_y]
-    jl      no_paddle_collision       ; No collision if the ball is above the paddle
-
-    mov     ax, word [ball_y]        ; Top edge of the ball (ball_y - radius)
-    sub     ax, word [ball_radius]
-    mov     bx, word [paddle_right_y]
-    add     bx, word [paddle_height]
-    cmp     ax, bx
-    jg      no_paddle_collision       ; No collision if the ball is below the paddle
-
-    ; Checks if the collision is at the top or bottom of the paddle
-    mov     ax, word [ball_y]        ; Y position of the ball's center
-    mov     bx, word [paddle_right_y]
-    add     bx, word [ball_radius]   ; BX = top of the paddle + ball radius
-    cmp     ax, bx
-    jl      computer_scores          ; Collision at the top
-
-    mov     bx, word [paddle_right_y]
-    add     bx, word [paddle_height]
-    sub     bx, word [ball_radius]   ; BX = bottom of the paddle - ball radius
-    cmp     ax, bx
-    jg      computer_scores          ; Collision at the bottom
-
-    ; Collision at the front of the paddle (player scores a point)
-    call    give_point_to_player_one
-    jmp     no_paddle_collision
-
-; Player two (left paddle) scores routine
-give_point_to_player_two:
-    neg     word [ball_velocity_x]
-    ; You may want to add a player two score variable and update display here
+    jg      near invert_y_velocity
     ret
 
-computer_scores:
-    ; Collision at the top or bottom (computer scores a point)
-    call    give_point_to_computer
+;-----------------------------------------------------------------------------
+; Detects paddle collisions and determines collision region
+;-----------------------------------------------------------------------------
+detect_paddle_contact:
+    ; Left paddle collision detection
+    mov     ax, word [ball_position_x]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [left_paddle_x]
+    add     bx, word [paddle_thickness]
+    cmp     ax, bx
+    jg      skip_left_paddle_check
+    mov     ax, word [ball_position_x]
+    add     ax, word [ball_diameter]
+    cmp     ax, word [left_paddle_x]
+    jl      skip_left_paddle_check
+    mov     ax, word [ball_position_y]
+    add     ax, word [ball_diameter]
+    cmp     ax, word [left_paddle_y]
+    jl      skip_left_paddle_check
+    mov     ax, word [ball_position_y]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [left_paddle_y]
+    add     bx, word [left_paddle_height]    ; ← CHANGED to left_paddle_height
+    cmp     ax, bx
+    jg      skip_left_paddle_check
+    
+    ; Left paddle collision handling
+    mov     ax, word [ball_position_y]
+    mov     bx, word [left_paddle_y]
+    add     bx, word [ball_diameter]
+    cmp     ax, bx
+    jl      left_paddle_player_one_scores
+    mov     bx, word [left_paddle_y]
+    add     bx, word [left_paddle_height]    ; ← CHANGED to left_paddle_height
+    sub     bx, word [ball_diameter]
+    cmp     ax, bx
+    jg      left_paddle_player_one_scores
+    
+    call    award_point_player_two
+    jmp     no_paddle_contact
+    
+left_paddle_player_one_scores:
+    call    award_point_player_one
+    jmp     no_paddle_contact
 
-no_paddle_collision:
-    ret                        ; Returns from the procedure
+skip_left_paddle_check:
+    ; Right paddle horizontal collision
+    mov     ax, word [ball_position_x]
+    add     ax, word [ball_diameter]
+    cmp     ax, word [right_paddle_x]
+    jl      no_paddle_contact
+
+    mov     ax, word [ball_position_x]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [right_paddle_x]
+    add     bx, word [paddle_thickness]
+    cmp     ax, bx
+    jg      no_paddle_contact
+
+    ; Right paddle vertical collision
+    mov     ax, word [ball_position_y]
+    add     ax, word [ball_diameter]
+    cmp     ax, word [right_paddle_y]
+    jl      no_paddle_contact
+
+    mov     ax, word [ball_position_y]
+    sub     ax, word [ball_diameter]
+    mov     bx, word [right_paddle_y]
+    add     bx, word [right_paddle_height]    ; ← CHANGED to right_paddle_height
+    cmp     ax, bx
+    jg      no_paddle_contact
+
+    ; Determine collision region
+    mov     ax, word [ball_position_y]
+    mov     bx, word [right_paddle_y]
+    add     bx, word [ball_diameter]
+    cmp     ax, bx
+    jl      player_two_scores
+
+    mov     bx, word [right_paddle_y]
+    add     bx, word [right_paddle_height]    ; ← CHANGED to right_paddle_height
+    sub     bx, word [ball_diameter]
+    cmp     ax, bx
+    jg      player_two_scores
+
+    call    award_point_player_one
+    jmp     no_paddle_contact
+
+player_two_scores:
+    call    award_point_player_two
+
+no_paddle_contact:
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: give_point_to_player_one
-; In this version, it is used to reverse the ball's direction after paddle collision.
+; Scoring procedures
 ;-----------------------------------------------------------------------------
-give_point_to_player_one:
-    neg     word [ball_velocity_x] ; Reverses the horizontal velocity of the ball
-    inc     byte [player_one_points] ; Increments player one's score
-    call    update_player_one_points  ; Calls 'update_player_one_points' to update the score display
-    ret                         ; Returns from the procedure
+award_point_player_one:
+    neg     word [ball_velocity_x]
+    inc     byte [player_one_score]
+    call    update_player_one_display
+    ret
 
-;-----------------------------------------------------------------------------
-; Procedure: give_point_to_computer
-; In this version, resets the ball's position and reverses the ball's direction.
-;-----------------------------------------------------------------------------
-give_point_to_computer:
-    inc     byte [computer_points] ; Increments the computer's score
-    neg     word [ball_velocity_x] ; Reverses the horizontal velocity of the ball
-
-    call    reset_ball_position   ; Calls 'reset_ball_position' to reset the ball to the initial position
-    call    update_computer_points    ; Calls 'update_computer_points' to update the score display
-    ret                         ; Returns from the procedure
+award_point_player_two:
+    neg     word [ball_velocity_x]
+    inc     byte [player_two_score]
+    call    update_player_two_display
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: game_over
-; Resets the game scores (not actually used in game over logic in this version).
+; Game reset procedure
 ;-----------------------------------------------------------------------------
-game_over:
-    mov     byte [player_one_points], 00H ; Resets player one's score to 0
-    mov     byte [computer_points], 00H ; Resets the computer's score to 0
-    call    update_player_one_points  ; Updates player one's score display
-    call    update_computer_points    ; Updates the computer's score display
-    ret                         ; Returns from the procedure
-
-;-----------------------------------------------------------------------------
-; Procedure: neg_velocity_y
-; Reverses the vertical velocity of the ball.
-;-----------------------------------------------------------------------------
-neg_velocity_y:
-    neg     word [ball_velocity_y] ; Negates (reverses) the vertical velocity
-    ret                         ; Returns from the procedure
+reset_game_state:
+    mov     byte [player_one_score], 00H
+    mov     byte [player_two_score], 00H
+    call    update_player_one_display
+    call    update_player_two_display
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: neg_velocity_x
-; Reverses the horizontal velocity of the ball.
+; Velocity inversion procedures
 ;-----------------------------------------------------------------------------
-neg_velocity_x:
-    neg     word [ball_velocity_x] ; Negates (reverses) the horizontal velocity
-    ret                         ; Returns from the procedure
+invert_y_velocity:
+    neg     word [ball_velocity_y]
+    ret
 
-;-----------------------------------------------------------------------------
-; Procedure: exit_collision_paddle (empty procedure - placeholder)
-;-----------------------------------------------------------------------------
-exit_collision_paddle:
-    ret                         ; Returns from the procedure
+invert_x_velocity:
+    neg     word [ball_velocity_x]
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: move_paddles
-; Handles paddle movement based on keyboard input.
+; Paddle movement processing
 ;-----------------------------------------------------------------------------
-move_paddles:
-    ; Checks for keyboard input
-    mov     ah, 01h                 ; BIOS function to CHECK KEYBOARD STATUS
-    int     16h                 ; Calls the BIOS keyboard service
-    jz      near exit_paddle_mov      ; Jumps to 'exit_paddle_mov' if Zero Flag is set (no key pressed)
-    mov     ah, 00h                 ; BIOS function to GET KEY PRESSED
-    int     16h                 ; Calls the BIOS keyboard service to read the pressed key (AL=ASCII, AH=Scan Code)
-    jmp     check_key           ; Jumps to 'check_key' to process the pressed key
+process_paddle_movement:
+    mov     ah, 01h                 ; Check keyboard status
+    int     16h
+    jz      exit_paddle_processing
+    mov     ah, 00h                 ; Get key press
+    int     16h
+    jmp     process_key_input
 
-;-----------------------------------------------------------------------------
-; Label: check_key
-; Checks the pressed key and performs corresponding paddle actions.
-;-----------------------------------------------------------------------------
-check_key:
+process_key_input:
+    ; Exit game keys
+    cmp al, 78h ; 'x'
+    je near terminate_game
+    cmp al, 58h ; 'X'
+    je near terminate_game
 
-    ; Checks if 'x' or 'X' key was pressed to exit the game
-    cmp     al, 78h ; 'x'
-    je      near exit_game
-    cmp     al, 58h ; 'X'
-    je      near exit_game
+    ; Player 1 controls (Left paddle)
+    cmp al, 77h ; 'w'
+    je move_left_paddle_upward
+    cmp al, 57h ; 'W'
+    je move_left_paddle_upward
+    cmp al, 73h ; 's'
+    je move_left_paddle_downward
+    cmp al, 83h ; 'S'
+    je move_left_paddle_downward
+    cmp al, 61h ; 'a' - Paddle enhance
+    je near activate_left_paddle_enhance
+    cmp al, 41h ; 'A'
+    je near activate_left_paddle_enhance
+    cmp al, 64h ; 'd' - Velocity boost
+    je near activate_velocity_boost
+    cmp al, 44h ; 'D'
+    je near activate_velocity_boost
+    cmp al, 71h ; 'q' - Slow ball
+    je near activate_left_slow_ball
+    cmp al, 51h ; 'Q'
+    je near activate_left_slow_ball
 
-    ; Left Paddle Controls (W/S for up/down, A for boost)
-    cmp     al, 77h ; 'w'
-    je      move_left_paddle_up
-    cmp     al, 57h ; 'W'
-    je      move_left_paddle_up
-    cmp     al, 73h ; 's'
-    je      move_left_paddle_down
-    cmp     al, 83h ; 'S'
-    je      move_left_paddle_down
-    cmp     al, 61h ; 'a' - Left player boost
-    je      near activate_paddle_boost_left
-    cmp     al, 41h ; 'A'
-    je      near activate_paddle_boost_left
+    ; Player 2 controls (Right paddle)
+    cmp ah, 48h ; Up arrow
+    je move_right_paddle_upward
+    cmp ah, 50h ; Down arrow
+    je move_right_paddle_downward
+    cmp ah, 4Bh ; Left arrow - Paddle enhance
+    je near activate_right_paddle_enhance
+    cmp ah, 4Dh ; Right arrow - Velocity boost
+    je near activate_velocity_boost
+    
+    ; Player 2 slow ball
+    cmp al, 2Fh ; '/' key
+    je near activate_right_slow_ball
+    cmp al, 3Fh ; '?' key
+    je near activate_right_slow_ball
 
-    ; Right Paddle Controls (Up/Down arrows, Left arrow for boost)
-    cmp     ah, 48h         ; Up arrow scan code
-    je      move_right_paddle_up
-    cmp     ah, 50h         ; Down arrow scan code
-    je      move_right_paddle_down  
-    cmp     ah, 4Bh         ; Left arrow scan code  
-    je      near activate_paddle_boost_right
-    cmp     ah, 4Dh         ; Right arrow scan code
-    je      near activate_speed_boost
+    jmp exit_paddle_processing
 
-    jmp     exit_paddle_mov
+; Left paddle movement
+move_left_paddle_upward:
+    mov     ax, word [paddle_move_speed]
+    sub     word [left_paddle_y], ax
+    mov     bx, word [play_area_top]
+    cmp     word [left_paddle_y], bx
+    jl      adjust_left_paddle_top
+    jmp     exit_paddle_processing
 
-; Left paddle movement routines
-move_left_paddle_up:
-    mov     ax, word [paddle_velocity]
-    sub     word [paddle_left_y], ax
-    mov     bx, word [top_margin]
-    cmp     word [paddle_left_y], bx
-    jl      fix_paddle_left_top_position
-    jmp     exit_paddle_mov
-fix_paddle_left_top_position:
-    mov     word [paddle_left_y], bx
-    jmp     exit_paddle_mov
+adjust_left_paddle_top:
+    mov     word [left_paddle_y], bx
+    jmp     exit_paddle_processing
 
-move_left_paddle_down:
-    mov     ax, word [paddle_velocity]
-    add     word [paddle_left_y], ax
-    mov     ax, word [window_height]
-    sub     ax, word [window_bounds]
-    sub     ax, word [paddle_height]
-    cmp     word [paddle_left_y], ax
-    jg      fix_paddle_left_bottom_position
-    jmp     exit_paddle_mov
-fix_paddle_left_bottom_position:
-    mov     word [paddle_left_y], ax
-    jmp     exit_paddle_mov
+move_left_paddle_downward:
+    mov     ax, word [paddle_move_speed]
+    add     word [left_paddle_y], ax
+    mov     ax, word [display_height]
+    sub     ax, word [border_offset]
+    sub     ax, word [standard_paddle_height]
+    cmp     word [left_paddle_y], ax
+    jg      adjust_left_paddle_bottom
+    jmp     exit_paddle_processing
 
-;-----------------------------------------------------------------------------
-; Procedure: move_right_paddle_up
-; Moves the right paddle up, with boundary checking.
-;-----------------------------------------------------------------------------
-move_right_paddle_up:
-    mov     ax, word [paddle_velocity] ; Gets the paddle velocity
-    sub     word [paddle_right_y], ax ; Subtracts the velocity from the paddle's Y position (moves up)
+adjust_left_paddle_bottom:
+    mov     word [left_paddle_y], ax
+    jmp     exit_paddle_processing
 
-	mov		bx, word [top_margin]   ; Loads the top margin
-    cmp     word [paddle_right_y], bx ; Compares the paddle's Y position with the top margin
+; Right paddle movement
+move_right_paddle_upward:
+    mov     ax, word [paddle_move_speed]
+    sub     word [right_paddle_y], ax
+	mov	bx, word [play_area_top]
+    cmp     word [right_paddle_y], bx
+    jl      adjust_right_paddle_top
+    jmp     exit_paddle_processing
 
-    jl      fix_paddle_right_top_position ; Jumps if paddle's Y position is Less than the top margin (out of bounds)
-    jmp     exit_paddle_mov       ; Otherwise, exits paddle movement handling
+adjust_right_paddle_top:
+    mov     word [right_paddle_y], bx
+    jmp     exit_paddle_processing
 
-fix_paddle_right_top_position:
-    mov     word [paddle_right_y], bx ; Corrects the paddle's Y position to the top margin (prevents going out of bounds)
-    jmp     exit_paddle_mov       ; Exits paddle movement handling
+move_right_paddle_downward:
+    mov     ax, word [paddle_move_speed]
+    add     word [right_paddle_y], ax
+    mov     ax, word [display_height]
+    sub     ax, word [border_offset]
+    sub     ax, word [standard_paddle_height]
+    cmp     word [right_paddle_y], ax
+    jg      adjust_right_paddle_bottom
+    jmp     exit_paddle_processing
 
-;-----------------------------------------------------------------------------
-; Procedure: move_right_paddle_down
-; Moves the right paddle down, with boundary checking.
-;-----------------------------------------------------------------------------
-move_right_paddle_down:
-    mov     ax, word [paddle_velocity] ; Gets the paddle velocity
-    add     word [paddle_right_y], ax ; Adds the velocity to the paddle's Y position (moves down)
+adjust_right_paddle_bottom:
+    mov     word [right_paddle_y], ax
+    jmp     exit_paddle_processing
 
-    mov     ax, word [window_height] ; Gets the screen height
-    sub     ax, word [window_bounds] ; Subtracts the window boundary
-    sub     ax, word [paddle_height] ; Subtracts the paddle height to get the bottom boundary for the paddle
-
-    cmp     word [paddle_right_y], ax ; Compares the paddle's Y position with the bottom boundary
-    jg      fix_paddle_right_bottom_position ; Jumps if paddle's Y position is Greater than the bottom boundary (out of bounds)
-
-    jmp     exit_paddle_mov       ; Otherwise, exits paddle movement handling
-
-fix_paddle_right_bottom_position:
-    mov     word [paddle_right_y], ax ; Corrects the paddle's Y position to the bottom boundary (prevents going out of bounds)
-    jmp     exit_paddle_mov       ; Exits paddle movement handling
-
-;-----------------------------------------------------------------------------
-; Procedure: move_right_paddle_left
-;-----------------------------------------------------------------------------
-move_right_paddle_left:
-    mov     ax, word [paddle_velocity]
-    sub     word [paddle_right_x], ax
-
-    mov     ax, word [window_width]
-    sub     ax, word [right_margin]
-
-    cmp     word [paddle_right_x], ax
-    jl      fix_paddle_right_left_position
-    jmp     exit_paddle_mov
-
-fix_paddle_right_left_position:
-    mov     word [paddle_right_x], ax
-    jmp     exit_paddle_mov
+exit_paddle_processing:
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: move_right_paddle_right
+; Power-up activation procedures
 ;-----------------------------------------------------------------------------
-move_right_paddle_right:
-    mov     ax, word [paddle_velocity]
-    add     word [paddle_right_x], ax
-
-    mov     ax, word [window_width]
-    sub     ax, word [window_bounds]
-    sub     ax, word [paddle_width]
-
-    cmp     word [paddle_right_x], ax
-    jg      fix_paddle_right_right_position
-    jmp     exit_paddle_mov
-
-fix_paddle_right_right_position:
-    mov     word [paddle_right_x], ax
-    jmp     exit_paddle_mov
-
-;-----------------------------------------------------------------------------
-; Label: exit_paddle_mov
-; Label to exit paddle movement handling.
-;-----------------------------------------------------------------------------
-exit_paddle_mov:
-    ret                         ; Returns from the procedure
-
-;-----------------------------------------------------------------------------
-; Procedure: activate_speed_boost
-; Activates a temporary speed boost for 2 seconds when right arrow key is pressed.
-;-----------------------------------------------------------------------------
-activate_speed_boost:
-    cmp     byte [speed_boost_active], 1
-    je      exit_speed_boost           ; If boost already active, do nothing
+activate_velocity_boost:
+    ; Prevent boost if slow ball active
+    cmp byte [slow_ball_left_active], 1
+    je exit_velocity_boost
+    cmp byte [slow_ball_right_active], 1  
+    je exit_velocity_boost
+    
+    cmp byte [velocity_boost_active], 1
+    je exit_velocity_boost
     
     ; Store original velocities
     mov     ax, word [ball_velocity_x]
-    mov     word [original_velocity_x], ax
+    mov     word [base_velocity_x], ax
     mov     ax, word [ball_velocity_y]
-    mov     word [original_velocity_y], ax
+    mov     word [base_velocity_y], ax
     
-    ; Apply speed boost (double the speed)
+    ; Apply velocity boost
     mov     ax, word [ball_velocity_x]
-    sal     ax, 1                      ; Multiply by 2 (shift left)
+    sal     ax, 1
     mov     word [ball_velocity_x], ax
     
     mov     ax, word [ball_velocity_y]
-    sal     ax, 1                      ; Multiply by 2 (shift left)
+    sal     ax, 1
     mov     word [ball_velocity_y], ax
     
-    ; Activate boost and set timer
-    mov     byte [speed_boost_active], 1
-    mov     byte [speed_boost_timer], 36  ; ~2 seconds at 18.2 ticks/sec
+    ; Activate boost
+    mov     byte [velocity_boost_active], 1
+    mov     byte [velocity_boost_duration], 36
     
-    jmp     exit_speed_boost
+    jmp     exit_velocity_boost
 
-exit_speed_boost:
+exit_velocity_boost:
+    ret
+
+activate_right_paddle_enhance:
+    cmp byte [paddle_enhance_right], 1
+    je exit_right_enhance
+    
+    ; Apply right paddle enhancement
+    mov ax, word [right_paddle_height]
+    mov word [standard_height_right], ax
+    mov ax, word [enhanced_height_right]
+    mov word [right_paddle_height], ax
+    
+    mov byte [paddle_enhance_right], 1
+    mov byte [paddle_timer_right], 72
+    
+exit_right_enhance:
+    ret
+
+activate_left_paddle_enhance:
+    cmp byte [paddle_enhance_left], 1
+    je exit_left_enhance
+    
+    ; Apply left paddle enhancement
+    mov ax, word [left_paddle_height]
+    mov word [standard_height_left], ax
+    mov ax, word [enhanced_height_left]
+    mov word [left_paddle_height], ax
+    
+    mov byte [paddle_enhance_left], 1
+    mov byte [paddle_timer_left], 72
+    
+exit_left_enhance:
+    ret
+
+activate_left_slow_ball:
+    cmp byte [slow_ball_left_active], 1
+    je exit_slow_ball_left
+    
+    ; Prevent multiple slow balls
+    cmp byte [slow_ball_right_active], 1
+    je exit_slow_ball_left
+    
+    ; Store original velocity
+    mov ax, word [ball_velocity_x]
+    mov word [base_vel_x_player_left], ax
+    mov ax, word [ball_velocity_y] 
+    mov word [base_vel_y_player_left], ax
+    
+    ; Apply slow effect
+    sar word [ball_velocity_x], 1
+    sar word [ball_velocity_y], 1
+    
+    mov byte [slow_ball_left_active], 1
+    mov byte [slow_ball_left_timer], 64
+    
+exit_slow_ball_left:
+    jmp exit_paddle_processing
+
+activate_right_slow_ball:
+    cmp byte [slow_ball_right_active], 1
+    je exit_slow_ball_right
+    
+    ; Prevent multiple slow balls
+    cmp byte [slow_ball_left_active], 1
+    je exit_slow_ball_right
+    
+    ; Store original velocity
+    mov ax, word [ball_velocity_x]
+    mov word [base_vel_x_player_right], ax
+    mov ax, word [ball_velocity_y] 
+    mov word [base_vel_y_player_right], ax
+    
+    ; Apply slow effect
+    sar word [ball_velocity_x], 1
+    sar word [ball_velocity_y], 1
+    
+    mov byte [slow_ball_right_active], 1
+    mov byte [slow_ball_right_timer], 64
+    
+exit_slow_ball_right:
+    jmp exit_paddle_processing
+
+;-----------------------------------------------------------------------------
+; Ball position reset
+;-----------------------------------------------------------------------------
+reset_ball_location:
+    mov     ax, word [ball_initial_x]
+    mov     word [ball_position_x], ax
+    mov     ax, word [ball_initial_y]
+    mov     word [ball_position_y], ax
     ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: activate_paddle_boost_right
-; Increases right paddle for 4 seconds when left arrow key is pressed.
+; User interface rendering
 ;-----------------------------------------------------------------------------
-activate_paddle_boost_right:
-    cmp byte [paddle_boost_active_right], 1
-    je exit_paddle_boost_right
+display_interface:
+    ; Header line 1
+    mov     ah, 02H
+    mov     bh, 00H
+    mov     dh, 01H
+    mov     dl, 06H
+    int     10H
+
+    mov     ah, 09H
+    lea     dx, [game_header]
+    int     21H
+
+    ; Header line 2 - Prefix
+    mov     ah, 02H
+    mov     bh, 00H
+    mov     dh, 02H
+    mov     dl, 06H
+    int     10H
+
+    mov     ah, 09H
+    lea     dx, [score_prefix]
+    int     21H
+
+    ; Player 1 score
+    mov     ah, 09H
+    lea     dx, [player_one_display]
+    int     21H
+
+    ; Score separator
+    mov     ah, 09H
+    lea     dx, [score_separator]
+    int     21H
+
+    ; Player 2 score
+    mov     ah, 09H
+    lea     dx, [player_two_display]
+    int     21H
+
+    ; Speed display text
+    mov     ah, 09H
+    lea     dx, [speed_display_text]
+    int     21H
+
+    ; Current speed
+    mov     ah, 09H
+    lea     dx, [current_speed_display]
+    int     21H
+
+    ; Boost status indicator
+    cmp     byte [velocity_boost_active], 1
+    jne     skip_boost_indicator
     
-    ; Store original height and apply boost to RIGHT paddle only
-    mov ax, word [paddle_right_height]
-    mov word [original_paddle_height_right], ax
-    mov ax, word [boost_paddle_height_right]
-    mov word [paddle_right_height], ax
+    mov     ah, 02H
+    mov     bh, 00H
+    mov     dh, 03H
+    mov     dl, 06H
+    int     10H
     
-    mov byte [paddle_boost_active_right], 1
-    mov byte [paddle_boost_timer_right], 72
-    
-exit_paddle_boost_right:
-    ret
+    mov     ah, 09H
+    lea     dx, [boost_status_message]
+    int     21H
 
-;-----------------------------------------------------------------------------
-; Procedure: activate_paddle_boost_left  
-; Increases left paddle for 4 seconds when 'A' key is pressed.
-;-----------------------------------------------------------------------------
-activate_paddle_boost_left:
-    cmp byte [paddle_boost_active_left], 1
-    je exit_paddle_boost_left
-    
-    ; Store original height and apply boost to LEFT paddle only
-    mov ax, word [paddle_left_height]
-    mov word [original_paddle_height_left], ax
-    mov ax, word [boost_paddle_height_left]
-    mov word [paddle_left_height], ax
-    
-    mov byte [paddle_boost_active_left], 1
-    mov byte [paddle_boost_timer_left], 72
-    
-exit_paddle_boost_left:
-    ret
-
-
-;-----------------------------------------------------------------------------
-; Procedure: set_ball_speed_from_stage
-; Sets the ball speed based on the current speed level index.
-;-----------------------------------------------------------------------------
-set_ball_speed_from_stage:
-    mov     bl, byte [current_speed_stage_index] ; Gets the current speed level index
-    mov     bh, 00h                             ; Clears BH for word offset calculation
-    mov     si, bx                              ; Moves the index to SI
-    sal     si, 1                               ; Multiplies the index by 2 to get the word offset in 'ball_speeds' array
-    lea     bx, [ball_speeds + si]              ; Loads the effective address of the selected speed value into BX
-
-    mov     ax, word [bx]                       ; Loads the new speed value from memory into AX
-
-    ; Preserves X direction
-    mov     bx, word [ball_velocity_x]          ; Gets the current horizontal velocity
-    or      bx, bx                              ; Tests if the current X velocity is negative (OR with itself, SF will be set if negative)
-    jns     .check_y                            ; Jumps if Not Signed (positive or zero), no need to negate
-    neg     ax                                  ; Negates the new speed value if the current X velocity is negative
-.check_y:
-    mov     word [ball_velocity_x], ax          ; Sets the new horizontal velocity
-
-    ; Gets the new base speed again for Y velocity (reloads from array)
-    mov     bl, byte [current_speed_stage_index] ; Gets the current level index again
-    mov     bh, 00h
-    mov     si, bx
-    sal     si, 1
-    lea     bx, [ball_speeds + si]
-    mov     ax, word [bx]
-
-    ; Preserves Y direction
-    mov     bx, word [ball_velocity_y]          ; Gets the current vertical velocity
-    or      bx, bx                              ; Tests if the current Y velocity is negative
-    jns     .finish                             ; Jumps if Not Signed (positive or zero), no need to negate
-    neg     ax                                  ; Negates the new speed value if the current Y velocity is negative
-.finish:
-    mov     word [ball_velocity_y], ax          ; Sets the new vertical velocity
-
-    ; Updates the speed display in the UI
-    mov     al, byte [current_speed_stage_index] ; Gets the current speed level index
-    inc     al                                  ; Converts to base 1 for display (levels are 1, 2, 3 not 0, 1, 2)
-    add     al, 30h                            ; Converts to ASCII character ('1', '2' or '3')
-    mov     byte [ball_speed_text], al          ; Updates the speed text in the data segment
-
-    jmp     exit_speed            ; Exits speed adjustment
-
-;-----------------------------------------------------------------------------
-; Label: exit_speed
-; Label to exit speed adjustment procedures.
-;-----------------------------------------------------------------------------
-exit_speed:
-    ret                         ; Returns from the procedure
-
-;-----------------------------------------------------------------------------
-; Procedure: reset_ball_position
-; Resets the ball to its original starting position.
-;-----------------------------------------------------------------------------
-reset_ball_position:
-    mov     ax, word [ball_original_x] ; Gets the original X position
-    mov     word [ball_x], ax        ; Sets the current ball X position to the original X position
-    mov     ax, word [ball_original_y] ; Gets the original Y position
-    mov     word [ball_y], ax        ; Sets the current ball Y position to the original Y position
-    ret                         ; Returns from the procedure
-
-;-----------------------------------------------------------------------------
-; Procedure: draw_ui
-; Draws the user interface elements (headers, scores, speed display).
-;-----------------------------------------------------------------------------
-draw_ui:
-    ; --- Clears the UI Area (Optional, but recommended - adjust coordinates as needed) ---
-    ; You might want to clear the area where the UI is drawn to prevent text overlapping
-    ; This would involve drawing a filled rectangle in the background color (black)
-    ; For simplicity, we'll skip explicit clearing for now, but consider adding it if needed.
-
-    ; --- Header Line 1 ---
-    mov     ah, 02H             ; BIOS function to SET CURSOR POSITION
-    mov     bh, 00H             ; Page number 0
-    mov     dh, 01H             ; Row number 1 (first line)
-    mov     dl, 06H             ; Column number 6 (horizontal position)
-    int     10H             ; Calls the BIOS video service
-
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [header_line1]  ; Loads the effective address of 'header_line1' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Part 1 (Name Prefix) ---
-    mov     ah, 02H             ; BIOS function to SET CURSOR POSITION
-    mov     bh, 00H             ; Page number 0
-    mov     dh, 02H             ; Row number 2 (second line)
-    mov     dl, 06H             ; Column number 6
-    int     10H             ; Calls the BIOS video service
-
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [header_line2_prefix] ; Loads the effective address of 'header_line2_prefix' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Player 1 Score ---
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [text_player_one_points] ; Loads the effective address of 'text_player_one_points' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Score Separator " x " ---
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [header_line2_score_separator] ; Loads the effective address of 'header_line2_score_separator' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Computer Score ---
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [text_computer_points] ; Loads the effective address of 'text_computer_points' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Computer Text " Computer Current speed: " ---
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [header_line2_computer_text] ; Loads the effective address of 'header_line2_computer_text' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Ball Speed Level (Number) ---
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [ball_speed_text]  ; Loads the effective address of 'ball_speed_text' into DX
-    int     21H             ; Calls the DOS service to print the string
-
-    ; --- Header Line 2 - Speed Range "(from 1 to 3)" - Optional ---
-    ; mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    ; lea     dx, [header_line2_velocity_range] ; Loads the effective address of 'header_line2_velocity_range' into DX
-    ; int     21H                 ; Calls the DOS service to print the string - Uncomment if you want to show the range
-
-        ; --- Speed Boost Indicator ---
-    cmp     byte [speed_boost_active], 1
-    jne     no_boost_indicator
-    
-    mov     ah, 02H             ; BIOS function to SET CURSOR POSITION
-    mov     bh, 00H             ; Page number 0
-    mov     dh, 03H             ; Row number 3
-    mov     dl, 06H             ; Column number 6
-    int     10H                 ; Calls the BIOS video service
-    
-    mov     ah, 09H             ; DOS function to WRITE STRING TO STANDARD OUTPUT
-    lea     dx, [boost_active_msg] ; Load message address
-    int     21H                 ; Calls the DOS service to print the string
-
-no_boost_indicator:
-
-	mov		byte[cor],branco_intenso	; Sets the color to bright white for antennas
+skip_boost_indicator:
+    ; Draw divider line
+	mov		byte[active_color],bright_white
 	mov		ax,0
-	push		ax
+	push	ax
 	mov		ax,49
-	push		ax
+	push	ax
 	mov		ax,639
-	push		ax
+	push	ax
 	mov		ax,49
-	push		ax
-	call		line                ; Calls the 'line' procedure to draw a horizontal line (antennas - visual element)
-    ret                         ; Returns from the procedure
+	push	ax
+	call	line
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: update_player_one_points
-; Updates the displayed score of player one.
+; Score display updates
 ;-----------------------------------------------------------------------------
-update_player_one_points:
-    mov al, byte [player_one_points]  ; Gets the player's score from memory
-    lea si, [text_player_one_points]  ; Loads the effective address of player 1's score text buffer into SI
-    call convert_score_to_ascii_2_digits ; Calls 'convert_score_to_ascii_2_digits' to convert the score to 2-digit ASCII
-    ret                         ; Returns from the procedure
+update_player_one_display:
+    mov al, byte [player_one_score]
+    lea si, [player_one_display]
+    call convert_score_to_text
+    ret
 
-;-----------------------------------------------------------------------------
-; Procedure: update_computer_points
-; Updates the displayed score of the computer.
-;-----------------------------------------------------------------------------
-update_computer_points:
-    mov al, byte [computer_points]  ; Gets the computer's score from memory
-    lea si,  [text_computer_points]    ; Loads the effective address of the computer's score text buffer into SI
-    call convert_score_to_ascii_2_digits ; Calls 'convert_score_to_ascii_2_digits' to convert the score to 2-digit ASCII
-    ret                         ; Returns from the procedure
+update_player_two_display:
+    mov al, byte [player_two_score]
+    lea si,  [player_two_display]
+    call convert_score_to_text
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: convert_score_to_ascii_2_digits
-; Converts a score (0-99) in AL to a 2-digit ASCII string.
-; Stores the result in the buffer pointed to by SI.
+; Score conversion to display text
 ;-----------------------------------------------------------------------------
-convert_score_to_ascii_2_digits:
-    ; Input: AL = score (0-99)
-    ;       SI = pointer to the score text buffer (text_player_one_points or text_computer_points)
-    ; Output: ASCII digits written to the buffer pointed to by SI
+convert_score_to_text:
+    push bx
+    push cx
+    push dx
 
-    push bx                     ; Saves the BX register
-    push cx                     ; Saves the CX register
-    push dx                     ; Saves the DX register
+    mov ah, 0
+    mov bl, 10
+    div bl
 
-    mov ah, 0                   ; Prepares AX for division (AH = 0 for word division with byte divisor)
-    mov bl, 10                  ; Divisor = 10 (for decimal conversion)
+    add ah, 30h
+    mov byte [si+1], ah
 
-    div bl                      ; Divides AX by BL: AL = quotient (tens digit), AH = remainder (units digit)
+    add al, 30h
+    mov byte [si], al
 
-    ; Converts the units digit to ASCII and stores it
-    add ah, 30h               ; Converts the remainder (units digit 0-9) to ASCII character ('0'-'9')
-    mov byte [si+1], ah         ; Stores the units digit (second character) in the buffer
-
-    ; Converts the tens digit to ASCII and stores it
-    add al, 30h               ; Converts the quotient (tens digit 0-9) to ASCII character ('0'-'9')
-    mov byte [si], al          ; Stores the tens digit (first character) in the buffer
-
-    pop dx                      ; Restores the DX register
-    pop cx                      ; Restores the CX register
-    pop bx                      ; Restores the BX register
-    ret                         ; Returns from the procedure
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: clear_screen
-; Clears the screen and sets the video mode to 640x480 16 colors.
+; Display management
 ;-----------------------------------------------------------------------------
-clear_screen:
-    mov     ah, 0               ; BIOS function to SET VIDEO MODE
-    mov     al, 12h             ; Video mode 12h: 640x480 16 colors
-    int     10h                 ; Calls the BIOS video service to set the video mode
+clear_display:
+    mov     ah, 0
+    mov     al, 12h
+    int     10h
 
-    mov     ah, 0Bh             ; BIOS function to SET BACKGROUND COLOR
-    mov     bh, 00h             ; Page number 0
-    mov     bl, 00h             ; Background color: Black (00h)
-    int     10h                 ; Calls the BIOS video service to set the background color
-    ret                         ; Returns from the procedure
+    mov     ah, 0Bh
+    mov     bh, 00h
+    mov     bl, 00h
+    int     10h
+    ret
 
 ;-----------------------------------------------------------------------------
-; Procedure: caracter
-; Writes a character (AL) at the current cursor position with the current color.
+; Graphics primitives
 ;-----------------------------------------------------------------------------
+
 caracter:
 		pushf                   ; Pushes the flags register onto the stack
 		push 		ax          ; Saves the AX register
@@ -1050,7 +881,7 @@ caracter:
     		mov     	ah,9          ; BIOS function to WRITE CHARACTER AND ATTRIBUTE
     		mov     	bh,0          ; Page number 0
     		mov     	cx,1          ; Number of times to write the character (1 time)
-   		mov     	bl,[cor]      ; Attribute (color) for the character, gets from 'cor' variable
+   		mov     	bl,[active_color]      ; Attribute (color) for the character, gets from 'active_color' variable
     		int     	10h         ; Calls the BIOS video service to write the character
 		pop		bp          ; Restores the BP register
 		pop		di          ; Restores the DI register
@@ -1062,11 +893,7 @@ caracter:
 		popf                    ; Pops the flags register from the stack
 		ret                     ; Returns from the procedure
 
-;-----------------------------------------------------------------------------
-; Procedure: plot_xy
-; Draws a pixel at coordinates (X, Y) with the current color.
-; Parameters are passed on the stack: Y then X.
-;-----------------------------------------------------------------------------
+; Draws a pixel at coordinates (X, Y) with the current color. Parameters are passed on the stack: Y then X.
 plot_xy:
 		push		bp          ; Saves the BP register
 		mov		bp,sp          ; Sets BP to the stack pointer to access parameters
@@ -1078,7 +905,7 @@ plot_xy:
 		push		si          ; Saves the SI register
 		push		di          ; Saves the DI register
 	    mov     	ah,0ch        ; BIOS function to WRITE PIXEL
-	    mov     	al,[cor]      ; Pixel color, gets from 'cor' variable
+	    mov     	al,[active_color]      ; Pixel color, gets from 'active_color' variable
 	    mov     	bh,0          ; Page number 0
 	    mov     	dx,[bp+4]     ; Gets the Y coordinate from the stack [bp+4]
 	    mov     	cx,[bp+6]     ; Gets the X coordinate from the stack [bp+6]
@@ -1093,11 +920,7 @@ plot_xy:
 		pop		bp          ; Restores the BP register
 		ret		4             ; Returns from the procedure, clears 4 bytes from the stack (2 parameters: X and Y - 2 bytes each)
 
-;-----------------------------------------------------------------------------
-; Procedure: circle
-; Draws the outline of a circle using Bresenham's circle algorithm.
-; Parameters are passed on the stack: radius, center Y, center X.
-;-----------------------------------------------------------------------------
+; Draws the outline of a circle using Bresenham's circle algorithm. Parameters are passed on the stack: radius, center Y, center X.
 circle:
 	push 	bp              ; Saves the BP register
 	mov	 	bp,sp              ; Sets BP to the stack pointer to access parameters
@@ -1234,11 +1057,8 @@ fim_circle:
 	pop		bp              ; Restores the BP register
 	ret		6             ; Returns from the procedure, clears 6 bytes from the stack (3 parameters: radius, yc, xc - 2 bytes each)
 
-;-----------------------------------------------------------------------------
-; Procedure: full_circle
-; Draws a filled circle using Bresenham's circle algorithm and horizontal lines.
-; Parameters are passed on the stack: radius, center Y, center X.
-;-----------------------------------------------------------------------------
+
+; Draws a filled circle using Bresenham's circle algorithm and horizontal lines. Parameters are passed on the stack: radius, center Y, center X.
 full_circle:
 	push 	bp              ; Saves the BP register
 	mov	 	bp,sp              ; Sets BP to the stack pointer to access parameters
@@ -1357,11 +1177,7 @@ fim_full_circle:
 	pop		bp              ; Restores the BP register
 	ret		6             ; Returns from the procedure, clears 6 bytes from the stack (3 parameters: radius, yc, xc - 2 bytes each)
 
-;-----------------------------------------------------------------------------
-; Procedure: line
 ; Draws a line between two points (x1, y1) and (x2, y2) using Bresenham's line algorithm.
-; Parameters are passed on the stack: y2, x2, y1, x1.
-;-----------------------------------------------------------------------------
 line:
 		push		bp          ; Saves the BP register
 		mov		bp,sp          ; Sets BP to the stack pointer to access parameters
@@ -1382,7 +1198,7 @@ line:
 		xchg		ax,cx           ; Swaps x1 and x2
 		xchg		bx,dx           ; Swaps y1 and y2
 		jmp		line1           ; Jumps to line1 (now x1 < x2 is guaranteed)
-line2:		                                 ; deltax=0 - Vertical line case
+line2:		                                 ; diff_x=0 - Vertical line case
 		cmp		bx,dx           ; Compares y1 and y2
 		jb		line3           ; Jumps if y1 is Below y2 (y1 < y2)
 		xchg		bx,dx           ; Swaps y1 and y2 (now y1 < y2 is guaranteed)
@@ -1396,36 +1212,36 @@ line3:	                                 ; dx > bx - y2 > y1
 line31:		inc		bx          ; Increments y1
 		jmp		line3           ; Jumps back to line3 to plot the next pixel
 
-;deltax <>0 - Non-vertical line case
+;diff_x <>0 - Non-vertical line case
 line1:
-; Compares absolute values of deltax and deltay knowing that cx > ax (x2 > x1)
+; Compares absolute values of diff_x and diff_y knowing that cx > ax (x2 > x1)
 	; cx > ax (x2 > x1)
 		push		cx          ; Saves x2
-		sub		cx,ax           ; cx = x2 - x1 (deltax)
-		mov		[deltax],cx     ; Stores deltax in memory
+		sub		cx,ax           ; cx = x2 - x1 (diff_x)
+		mov		[diff_x],cx     ; Stores diff_x in memory
 		pop		cx          ; Restores x2
 		push		dx          ; Saves y2
-		sub		dx,bx           ; dx = y2 - y1 (deltay)
+		sub		dx,bx           ; dx = y2 - y1 (diff_y)
 		ja		line32          ; Jumps if y2 is Above y1 (y2 > y1)
-		neg		dx          ; Negates deltay if y2 <= y1 (makes it positive for algorithm)
+		neg		dx          ; Negates diff_y if y2 <= y1 (makes it positive for algorithm)
 line32:
-		mov		[deltay],dx     ; Stores deltay in memory
+		mov		[diff_y],dx     ; Stores diff_y in memory
 		pop		dx          ; Restores y2
 
 		push		ax          ; Saves x1
-		mov		ax,[deltax]     ; Gets deltax
-		cmp		ax,[deltay]     ; Compares deltax and deltay
+		mov		ax,[diff_x]     ; Gets diff_x
+		cmp		ax,[diff_y]     ; Compares diff_x and diff_y
 		pop		ax          ; Restores x1
-		jb		line5           ; Jumps if deltax is Below deltay (more vertical line)
+		jb		line5           ; Jumps if diff_x is Below diff_y (more vertical line)
 
-	; cx > ax and deltax>deltay - Mostly horizontal line
+	; cx > ax and diff_x>diff_y - Mostly horizontal line
 		push		cx          ; Saves x2
-		sub		cx,ax           ; cx = x2 - x1 (deltax)
-		mov		[deltax],cx     ; Stores deltax in memory
+		sub		cx,ax           ; cx = x2 - x1 (diff_x)
+		mov		[diff_x],cx     ; Stores diff_x in memory
 		pop		cx          ; Restores x2
 		push		dx          ; Saves y2
-		sub		dx,bx           ; dx = y2 - y1 (deltay)
-		mov		[deltay],dx     ; Stores deltay in memory
+		sub		dx,bx           ; dx = y2 - y1 (diff_y)
+		mov		[diff_y],dx     ; Stores diff_y in memory
 		pop		dx          ; Restores y2
 
 		mov		si,ax           ; SI = x1 (current x)
@@ -1434,20 +1250,20 @@ line4:
 		push		dx          ; Saves y2
 		push		si          ; Saves current x
 		sub		si,ax	         ; si = current x - x1
-		mov		ax,[deltay]     ; Gets deltay
-		imul		si          ; AX:DX = deltay * (current x - x1) - numerator
-		mov		si,[deltax]		     ; Gets deltax
-		shr		si,1            ; si = deltax / 2 - rounding term
+		mov		ax,[diff_y]     ; Gets diff_y
+		imul		si          ; AX:DX = diff_y * (current x - x1) - numerator
+		mov		si,[diff_x]		     ; Gets diff_x
+		shr		si,1            ; si = diff_x / 2 - rounding term
 ; if numerator (DX)>0 add if <0 subtract - rounding logic
 		cmp		dx,0            ; Checks the sign of DX (high word of numerator)
 		jl		ar1             ; Jumps if DX is Less than 0 (negative numerator)
-		add		ax,si           ; AX = AX + deltax/2 - adds rounding term
-		adc		dx,0            ; DX:AX += deltax/2 (handles carry)
+		add		ax,si           ; AX = AX + diff_x/2 - adds rounding term
+		adc		dx,0            ; DX:AX += diff_x/2 (handles carry)
 		jmp		arc1            ; Jumps to arc1
-ar1:		sub		ax,si           ; AX = AX - deltax/2 - subtracts rounding term
-		sbb		dx,0            ; DX:AX -= deltax/2 (handles borrow)
+ar1:		sub		ax,si           ; AX = AX - diff_x/2 - subtracts rounding term
+		sbb		dx,0            ; DX:AX -= diff_x/2 (handles borrow)
 arc1:
-		idiv		word [deltax]   ; AX = (DX:AX) / deltax - calculates y increment
+		idiv		word [diff_x]   ; AX = (DX:AX) / diff_x - calculates y increment
 		add		ax,bx           ; AX = AX + y1 - calculates current y
 		pop		si          ; Restores current x
 		push		si          ; Pushes current x
@@ -1466,12 +1282,12 @@ line5:		cmp		bx,dx           ; Compares y1 and y2
 		xchg		bx,dx           ; Swaps y1 and y2
 line7:
 		push		cx          ; Saves x2
-		sub		cx,ax           ; cx = x2 - x1 (deltax)
-		mov		[deltax],cx     ; Stores deltax in memory
+		sub		cx,ax           ; cx = x2 - x1 (diff_x)
+		mov		[diff_x],cx     ; Stores diff_x in memory
 		pop		cx          ; Restores x2
 		push		dx          ; Saves y2
-		sub		dx,bx           ; dx = y2 - y1 (deltay)
-		mov		[deltay],dx     ; Stores deltay in memory
+		sub		dx,bx           ; dx = y2 - y1 (diff_y)
+		mov		[diff_y],dx     ; Stores diff_y in memory
 		pop		dx          ; Restores y2
 
 		mov		si,bx           ; SI = y1 (current y)
@@ -1480,20 +1296,20 @@ line6:
 		push		si          ; Saves current y
 		push		ax          ; Saves x1
 		sub		si,bx	         ; si = current y - y1
-		mov		ax,[deltax]     ; Gets deltax
-		imul		si          ; AX:DX = deltax * (current y - y1) - numerator
-		mov		si,[deltay]		     ; Gets deltay
-		shr		si,1            ; si = deltay / 2 - rounding term
+		mov		ax,[diff_x]     ; Gets diff_x
+		imul		si          ; AX:DX = diff_x * (current y - y1) - numerator
+		mov		si,[diff_y]		     ; Gets diff_y
+		shr		si,1            ; si = diff_y / 2 - rounding term
 ; if numerator (DX)>0 add if <0 subtract - rounding logic
 		cmp		dx,0            ; Checks the sign of DX (high word of numerator)
 		jl		ar2             ; Jumps if DX is Less than 0 (negative numerator)
-		add		ax,si           ; AX = AX + deltay/2 - adds rounding term
-		adc		dx,0            ; DX:AX += deltay/2 (handles carry)
+		add		ax,si           ; AX = AX + diff_y/2 - adds rounding term
+		adc		dx,0            ; DX:AX += diff_y/2 (handles carry)
 		jmp		arc2            ; Jumps to arc2
-ar2:		sub		ax,si           ; AX = AX - deltay/2 - subtracts rounding term
-		sbb		dx,0            ; DX:AX -= deltay/2 (handles borrow)
+ar2:		sub		ax,si           ; AX = AX - diff_y/2 - subtracts rounding term
+		sbb		dx,0            ; DX:AX -= diff_y/2 (handles borrow)
 arc2:
-		idiv		word [deltay]   ; AX = (DX:AX) / deltay - calculates x increment
+		idiv		word [diff_y]   ; AX = (DX:AX) / diff_y - calculates x increment
 		mov		di,ax           ; DI = AX (current x increment)
 		pop		ax          ; Restores x1
 		add		di,ax           ; DI = DI + x1 - calculates current x
@@ -1519,18 +1335,17 @@ fim_line:
 		ret		8             ; Returns from the procedure, clears 8 bytes from the stack (4 parameters: y2, x2, y1, x1 - 2 bytes each)
 
 ;-----------------------------------------------------------------------------
-; Procedure: exit_game
-; Restores text mode and exits the program.
+; Program termination
 ;-----------------------------------------------------------------------------
-exit_game:
-    call clear_screen         ; Calls 'clear_screen' to clear the screen from graphics mode
-    mov     al, 03h            ; Video mode 03h: 80x25 text mode, 16 colors
-    int     10h                ; BIOS function to SET VIDEO MODE, restores text mode
+terminate_game:
+    call clear_display
+    mov     al, 03h
+    int     10h
 
-    mov     ah, 4Ch            ; DOS function to TERMINATE PROGRAM
-    mov     al, 00h            ; Exit code 0 (successful termination)
-    int     21h                ; Calls the DOS service to terminate the program
+    mov     ah, 4Ch
+    mov     al, 00h
+    int     21h
 
 segment stack stack
-    resb 512                          ; Reserves 512 bytes for stack space
-    stacktop:                          ; Label marking the top of the stack
+    resb 512
+    stacktop:
