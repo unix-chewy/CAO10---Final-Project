@@ -11,33 +11,23 @@ segment data
     frame_counter              db  0       ; Controls frame timing using system clock
     player_two_score           db  0       ; Player two's current score
     player_one_score           db  0       ; Player one's current score
-    ball_velocity_index        db  0       ; Current ball speed tier (0-2)
 
     ;-------------------------------------------------------------------------
     ; Power-up System Variables
     ;-------------------------------------------------------------------------
     velocity_boost_active      db  0       ; Velocity boost status
     velocity_boost_duration    db  0       ; Remaining boost time
-    base_velocity_x            dw  0       ; Original X velocity storage
-    base_velocity_y            dw  0       ; Original Y velocity storage
-    velocity_multiplier        dw  2       ; Boost speed factor
-
-    ; Player-specific original velocity storage
-    base_vel_x_player_left     dw  0  
-    base_vel_y_player_left     dw  0
-    base_vel_x_player_right    dw  0  
-    base_vel_y_player_right    dw  0
 
     ; Right Player Enhancement Variables
     paddle_enhance_right       db  0
     paddle_timer_right         db  0  
-    standard_height_right      dw  32h
+    previous_height_right      dw  32h
     enhanced_height_right      dw  64h
 
     ; Left Player Enhancement Variables
     paddle_enhance_left        db  0
     paddle_timer_left          db  0
-    standard_height_left       dw  32h
+    previous_height_left       dw  32h
     enhanced_height_left       dw  64h
 
     ; Ball Deceleration System
@@ -50,14 +40,13 @@ segment data
     ; User Interface Elements
     ;-------------------------------------------------------------------------
     game_header              db  'Final Project for Computer Architecture', '$'
-    score_prefix             db  'Team Members: Naguit Kyle, Santos Fritzch, Sunga Joney', '$'
+    team_members             db  'Team Members: Naguit Kyle - Santos, Fritzch - Sunga, Joney SCORE:', '$'
     score_separator          db ' x ', '$'
-    speed_display_text       db '  Computer -- Current speed: ', '$'
-    speed_range_info         db '(from 1 to 3)', '$'
     player_one_display       db  '00', '$'
     player_two_display       db  '00', '$'
-    current_speed_display    db  '1', '$'
-    boost_status_message     db  'VELOCITY BOOST ACTIVE!', '$'
+    player_one_wins_msg      db  'PLAYER 1 WINS!', '$'
+    player_two_wins_msg      db  'PLAYER 2 WINS!', '$'
+    restart_msg              db  'Press any key to restart', '$'
 
     ;-------------------------------------------------------------------------
     ; Game Object Properties
@@ -76,7 +65,6 @@ segment data
     display_height           dw 1E0h     ; Screen height (480px)
     border_offset            dw 05h      ; Collision boundary
     play_area_top            dw 032h     ; Top play boundary
-    side_boundary            dw 05Ah     ; Side margin
 
     ;-------------------------------------------------------------------------
     ; Paddle Configuration  
@@ -174,6 +162,7 @@ game_loop:
     call    render_paddles
     call    display_interface
     call    update_powerup_timers
+    call    check_game_over
 
 check_powerups:
     jmp     game_loop
@@ -189,11 +178,15 @@ update_powerup_timers:
     dec     byte [velocity_boost_duration]
     jnz     .check_right_paddle_boost
     
-    ; Restore original velocity
-    mov     ax, word [base_velocity_x]
+    ; Restore original speed by halving current velocity
+    mov     ax, word [ball_velocity_x]
+    sar     ax, 1                      ; Halve current X velocity (preserves sign)
     mov     word [ball_velocity_x], ax
-    mov     ax, word [base_velocity_y]
+    
+    mov     ax, word [ball_velocity_y]
+    sar     ax, 1                      ; Halve current Y velocity (preserves sign)
     mov     word [ball_velocity_y], ax
+    
     mov     byte [velocity_boost_active], 0
 
 .check_right_paddle_boost:
@@ -204,7 +197,7 @@ update_powerup_timers:
     jnz .check_left_paddle_boost
     
     ; Restore right paddle height
-    mov ax, word [standard_height_right]
+    mov ax, word [previous_height_right]
     mov word [right_paddle_height], ax
     mov byte [paddle_enhance_right], 0
 
@@ -216,7 +209,7 @@ update_powerup_timers:
     jnz .check_slow_ball_left
     
     ; Restore left paddle height
-    mov ax, word [standard_height_left]
+    mov ax, word [previous_height_left]
     mov word [left_paddle_height], ax
     mov byte [paddle_enhance_left], 0
 
@@ -227,13 +220,16 @@ update_powerup_timers:
     dec byte [slow_ball_left_timer]
     jnz .check_slow_ball_right
     
-    ; Restore original speed
-    mov ax, word [base_vel_x_player_left]
-    mov word [ball_velocity_x], ax
-    mov ax, word [base_vel_y_player_left]
-    mov word [ball_velocity_y], ax
+    ; Restore speed by DOUBLING current velocity (preserves direction)
+    mov     ax, word [ball_velocity_x]
+    sal     ax, 1                      ; Double current X velocity (preserves sign)
+    mov     word [ball_velocity_x], ax
     
-    mov byte [slow_ball_left_active], 0
+    mov     ax, word [ball_velocity_y]
+    sal     ax, 1                      ; Double current Y velocity (preserves sign)
+    mov     word [ball_velocity_y], ax
+    
+    mov     byte [slow_ball_left_active], 0
     jmp .exit_powerup_update
 
 .check_slow_ball_right:
@@ -243,13 +239,16 @@ update_powerup_timers:
     dec byte [slow_ball_right_timer]
     jnz .exit_powerup_update
     
-    ; Restore original speed  
-    mov ax, word [base_vel_x_player_right]
-    mov word [ball_velocity_x], ax
-    mov ax, word [base_vel_y_player_right]
-    mov word [ball_velocity_y], ax
+    ; Restore speed by DOUBLING current velocity (preserves direction)
+    mov     ax, word [ball_velocity_x]
+    sal     ax, 1                      ; Double current X velocity (preserves sign)
+    mov     word [ball_velocity_x], ax
     
-    mov byte [slow_ball_right_active], 0
+    mov     ax, word [ball_velocity_y]
+    sal     ax, 1                      ; Double current Y velocity (preserves sign)
+    mov     word [ball_velocity_y], ax
+    
+    mov     byte [slow_ball_right_active], 0
 
 .exit_powerup_update:
     ret
@@ -332,14 +331,14 @@ update_ball_position:
     mov     bx, word [border_offset]
     add     bx, word [border_offset]
     cmp     ax, bx
-    jl      near invert_x_velocity
+    jl      near award_point_player_two
 
     mov     ax, word [ball_position_x]
     add     ax, word [ball_diameter]
     mov     bx, word [display_width]
     sub     bx, word [border_offset]
     cmp     ax, bx
-    jg      near award_point_player_two
+    jg      near award_point_player_one
 
     ; Vertical movement
     mov     ax, word [ball_velocity_y]
@@ -384,27 +383,29 @@ detect_paddle_contact:
     mov     ax, word [ball_position_y]
     sub     ax, word [ball_diameter]
     mov     bx, word [left_paddle_y]
-    add     bx, word [left_paddle_height]    ; ← CHANGED to left_paddle_height
+    add     bx, word [left_paddle_height]
     cmp     ax, bx
     jg      skip_left_paddle_check
     
-    ; Left paddle collision handling
+    ; Left paddle collision handling - JUST DEFLECT, DON'T SCORE
     mov     ax, word [ball_position_y]
     mov     bx, word [left_paddle_y]
     add     bx, word [ball_diameter]
     cmp     ax, bx
-    jl      left_paddle_player_one_scores
+    jl      deflect_ball_left
     mov     bx, word [left_paddle_y]
-    add     bx, word [left_paddle_height]    ; ← CHANGED to left_paddle_height
+    add     bx, word [left_paddle_height]
     sub     bx, word [ball_diameter]
     cmp     ax, bx
-    jg      left_paddle_player_one_scores
+    jg      deflect_ball_left
     
-    call    award_point_player_two
+    ; Front collision with left paddle - deflect to the right
+    neg     word [ball_velocity_x]    ; Reverse X direction
     jmp     no_paddle_contact
     
-left_paddle_player_one_scores:
-    call    award_point_player_one
+deflect_ball_left:
+    ; Top/bottom collision with left paddle - deflect vertically
+    neg     word [ball_velocity_y]    ; Reverse Y direction
     jmp     no_paddle_contact
 
 skip_left_paddle_check:
@@ -430,7 +431,7 @@ skip_left_paddle_check:
     mov     ax, word [ball_position_y]
     sub     ax, word [ball_diameter]
     mov     bx, word [right_paddle_y]
-    add     bx, word [right_paddle_height]    ; ← CHANGED to right_paddle_height
+    add     bx, word [right_paddle_height]
     cmp     ax, bx
     jg      no_paddle_contact
 
@@ -439,19 +440,21 @@ skip_left_paddle_check:
     mov     bx, word [right_paddle_y]
     add     bx, word [ball_diameter]
     cmp     ax, bx
-    jl      player_two_scores
+    jl      deflect_ball_right
 
     mov     bx, word [right_paddle_y]
-    add     bx, word [right_paddle_height]    ; ← CHANGED to right_paddle_height
+    add     bx, word [right_paddle_height]
     sub     bx, word [ball_diameter]
     cmp     ax, bx
-    jg      player_two_scores
+    jg      deflect_ball_right
 
-    call    award_point_player_one
+    ; Front collision with right paddle - deflect to the left
+    neg     word [ball_velocity_x]    ; Reverse X direction
     jmp     no_paddle_contact
 
-player_two_scores:
-    call    award_point_player_two
+deflect_ball_right:
+    ; Top/bottom collision with right paddle - deflect vertically
+    neg     word [ball_velocity_y]    ; Reverse Y direction
 
 no_paddle_contact:
     ret
@@ -460,25 +463,82 @@ no_paddle_contact:
 ; Scoring procedures
 ;-----------------------------------------------------------------------------
 award_point_player_one:
-    neg     word [ball_velocity_x]
     inc     byte [player_one_score]
     call    update_player_one_display
+    call    reset_ball_location        ; Reset ball to center
+    
+    ; Set initial velocity - check if speed boost is active
+    mov     ax, word [velocity_tiers]  ; Base speed
+    
+    ; If speed boost is active, double the speed
+    cmp     byte [velocity_boost_active], 1
+    jne     .no_boost_p1
+    sal     ax, 1                      ; Double speed if boost active
+    
+.no_boost_p1:
+    ; If slow ball is active, halve the speed (overrides boost)
+    cmp     byte [slow_ball_left_active], 1
+    je      .apply_slow_p1
+    cmp     byte [slow_ball_right_active], 1
+    je      .apply_slow_p1
+    jmp     .set_velocity_p1
+    
+.apply_slow_p1:
+    sar     ax, 1                      ; Halve speed if slow ball active
+    
+.set_velocity_p1:
+    mov     word [ball_velocity_x], ax
+    neg     ax
+    mov     word [ball_velocity_y], ax
     ret
 
 award_point_player_two:
-    neg     word [ball_velocity_x]
     inc     byte [player_two_score]
     call    update_player_two_display
-    ret
-
-;-----------------------------------------------------------------------------
-; Game reset procedure
-;-----------------------------------------------------------------------------
-reset_game_state:
-    mov     byte [player_one_score], 00H
-    mov     byte [player_two_score], 00H
-    call    update_player_one_display
-    call    update_player_two_display
+    call    reset_ball_location        ; Reset ball to center  
+    
+    ; Set initial velocity - check if speed boost is active
+    mov     ax, word [velocity_tiers]  ; Base speed
+    
+    ; If speed boost is active, double the speed
+    cmp     byte [velocity_boost_active], 1
+    jne     .no_boost_p2
+    sal     ax, 1                      ; Double speed if boost active
+    
+.no_boost_p2:
+    ; If slow ball is active, halve the speed (overrides boost)
+    cmp     byte [slow_ball_left_active], 1
+    je      .apply_slow_p2
+    cmp     byte [slow_ball_right_active], 1
+    je      .apply_slow_p2
+    jmp     .set_velocity_p2
+    
+.apply_slow_p2:
+    sar     ax, 1                      ; Halve speed if slow ball active
+    
+.set_velocity_p2:
+    neg     ax                         ; Start going left for player 2
+    mov     word [ball_velocity_x], ax
+    mov     ax, word [velocity_tiers]  ; Get base speed again for Y
+    
+    ; Apply same logic to Y velocity
+    cmp     byte [velocity_boost_active], 1
+    jne     .no_boost_y_p2
+    sal     ax, 1
+    
+.no_boost_y_p2:
+    cmp     byte [slow_ball_left_active], 1
+    je      .apply_slow_y_p2
+    cmp     byte [slow_ball_right_active], 1
+    je      .apply_slow_y_p2
+    jmp     .set_y_velocity_p2
+    
+.apply_slow_y_p2:
+    sar     ax, 1
+    
+.set_y_velocity_p2:
+    neg     ax
+    mov     word [ball_velocity_y], ax
     ret
 
 ;-----------------------------------------------------------------------------
@@ -490,6 +550,115 @@ invert_y_velocity:
 
 invert_x_velocity:
     neg     word [ball_velocity_x]
+    ret
+
+;-----------------------------------------------------------------------------
+; Game over display procedures
+;-----------------------------------------------------------------------------
+display_player_one_wins:
+    call clear_display
+    
+    ; Display "PLAYER 1 WINS!" message
+    mov ah, 02H
+    mov bh, 00H
+    mov dh, 0Ch        ; Center row
+    mov dl, 14H        ; Center column
+    int 10H
+    
+    mov ah, 09H
+    lea dx, [player_one_wins_msg]
+    int 21H
+    
+    ; Display "Press any key to restart"
+    mov ah, 02H
+    mov bh, 00H
+    mov dh, 0Eh        ; Below the winner message
+    mov dl, 0Eh        ; Centered
+    int 10H
+    
+    mov ah, 09H
+    lea dx, [restart_msg]
+    int 21H
+    
+    ret
+
+display_player_two_wins:
+    call clear_display
+    
+    ; Display "PLAYER 2 WINS!" message
+    mov ah, 02H
+    mov bh, 00H
+    mov dh, 0Ch        ; Center row
+    mov dl, 14H        ; Center column
+    int 10H
+    
+    mov ah, 09H
+    lea dx, [player_two_wins_msg]
+    int 21H
+    
+    ; Display "Press any key to restart"
+    mov ah, 02H
+    mov bh, 00H
+    mov dh, 0Eh        ; Below the winner message
+    mov dl, 0Eh        ; Centered
+    int 10H
+    
+    mov ah, 09H
+    lea dx, [restart_msg]
+    int 21H
+    
+    ret
+
+;-----------------------------------------------------------------------------
+; Check for game over (first to 5 points wins)
+;-----------------------------------------------------------------------------
+check_game_over:
+    cmp byte [player_one_score], 5
+    jge game_over_player_one_wins
+    cmp byte [player_two_score], 5
+    jge game_over_player_two_wins
+    ret
+
+game_over_player_one_wins:
+    call display_player_one_wins
+    jmp wait_for_restart
+
+game_over_player_two_wins:
+    call display_player_two_wins
+    jmp wait_for_restart
+
+wait_for_restart:
+    ; Wait for any key press
+    mov ah, 00h
+    int 16h
+    
+    ; Reset the game after key press
+    call reset_game_state
+    ret
+
+;-----------------------------------------------------------------------------
+; Game reset
+;-----------------------------------------------------------------------------
+reset_game_state:
+    mov     byte [player_one_score], 00H
+    mov     byte [player_two_score], 00H
+    call    update_player_one_display
+    call    update_player_two_display
+    call    reset_ball_location
+    call    initialize_ball_motion
+    
+    ; Reset all power-ups
+    mov     byte [velocity_boost_active], 0
+    mov     byte [paddle_enhance_left], 0
+    mov     byte [paddle_enhance_right], 0
+    mov     byte [slow_ball_left_active], 0
+    mov     byte [slow_ball_right_active], 0
+    
+    ; Reset paddle heights to standard
+    mov     ax, word [standard_paddle_height]
+    mov     word [left_paddle_height], ax
+    mov     word [right_paddle_height], ax
+    
     ret
 
 ;-----------------------------------------------------------------------------
@@ -620,19 +789,13 @@ activate_velocity_boost:
     cmp byte [velocity_boost_active], 1
     je exit_velocity_boost
     
-    ; Store original velocities
+    ; Apply velocity boost to CURRENT direction
     mov     ax, word [ball_velocity_x]
-    mov     word [base_velocity_x], ax
-    mov     ax, word [ball_velocity_y]
-    mov     word [base_velocity_y], ax
-    
-    ; Apply velocity boost
-    mov     ax, word [ball_velocity_x]
-    sal     ax, 1
+    sal     ax, 1                      ; Double current X velocity
     mov     word [ball_velocity_x], ax
     
     mov     ax, word [ball_velocity_y]
-    sal     ax, 1
+    sal     ax, 1                      ; Double current Y velocity
     mov     word [ball_velocity_y], ax
     
     ; Activate boost
@@ -650,7 +813,7 @@ activate_right_paddle_enhance:
     
     ; Apply right paddle enhancement
     mov ax, word [right_paddle_height]
-    mov word [standard_height_right], ax
+    mov word [previous_height_right], ax
     mov ax, word [enhanced_height_right]
     mov word [right_paddle_height], ax
     
@@ -666,7 +829,7 @@ activate_left_paddle_enhance:
     
     ; Apply left paddle enhancement
     mov ax, word [left_paddle_height]
-    mov word [standard_height_left], ax
+    mov word [previous_height_left], ax
     mov ax, word [enhanced_height_left]
     mov word [left_paddle_height], ax
     
@@ -683,12 +846,6 @@ activate_left_slow_ball:
     ; Prevent multiple slow balls
     cmp byte [slow_ball_right_active], 1
     je exit_slow_ball_left
-    
-    ; Store original velocity
-    mov ax, word [ball_velocity_x]
-    mov word [base_vel_x_player_left], ax
-    mov ax, word [ball_velocity_y] 
-    mov word [base_vel_y_player_left], ax
     
     ; Apply slow effect
     sar word [ball_velocity_x], 1
@@ -707,12 +864,6 @@ activate_right_slow_ball:
     ; Prevent multiple slow balls
     cmp byte [slow_ball_left_active], 1
     je exit_slow_ball_right
-    
-    ; Store original velocity
-    mov ax, word [ball_velocity_x]
-    mov word [base_vel_x_player_right], ax
-    mov ax, word [ball_velocity_y] 
-    mov word [base_vel_y_player_right], ax
     
     ; Apply slow effect
     sar word [ball_velocity_x], 1
@@ -757,7 +908,7 @@ display_interface:
     int     10H
 
     mov     ah, 09H
-    lea     dx, [score_prefix]
+    lea     dx, [team_members]
     int     21H
 
     ; Player 1 score
@@ -773,30 +924,6 @@ display_interface:
     ; Player 2 score
     mov     ah, 09H
     lea     dx, [player_two_display]
-    int     21H
-
-    ; Speed display text
-    mov     ah, 09H
-    lea     dx, [speed_display_text]
-    int     21H
-
-    ; Current speed
-    mov     ah, 09H
-    lea     dx, [current_speed_display]
-    int     21H
-
-    ; Boost status indicator
-    cmp     byte [velocity_boost_active], 1
-    jne     skip_boost_indicator
-    
-    mov     ah, 02H
-    mov     bh, 00H
-    mov     dh, 03H
-    mov     dl, 06H
-    int     10H
-    
-    mov     ah, 09H
-    lea     dx, [boost_status_message]
     int     21H
 
 skip_boost_indicator:
